@@ -39,15 +39,6 @@ impl Product {
     }
 }
 
-pub(crate) fn initialize(db: &rusqlite::Connection) -> Result<()> {
-    db.execute_batch(
-        "CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY, name TEXT NOT NULL,
-        description TEXT NOT NULL, unit TEXT NOT NULL, price TEXT NOT NULL, vat TEXT NOT NULL,
-        exemption_reason TEXT NOT NULL);",
-    )?;
-    Ok(())
-}
-
 impl Store {
     pub fn products(&self) -> Result<Vec<Product>> {
         let mut query = self.0.prepare(

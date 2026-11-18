@@ -10,6 +10,21 @@ impl Store {
     }
 }
 
+impl Store {
+    /// File backing this database, `None` for in-memory databases.
+    pub fn path(&self) -> Option<std::path::PathBuf> {
+        let file: String = self
+            .0
+            .query_row(
+                "SELECT file FROM pragma_database_list WHERE name='main'",
+                [],
+                |row| row.get(0),
+            )
+            .ok()?;
+        (!file.is_empty()).then(|| file.into())
+    }
+}
+
 /// Verifies a FactureCraft snapshot and copies it without changing the source.
 pub fn restore_snapshot(source: &Path, destination: &Path) -> Result<()> {
     let connection = Connection::open_with_flags(source, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
@@ -22,6 +37,11 @@ pub fn restore_snapshot(source: &Path, destination: &Path) -> Result<()> {
         |row| row.get(0),
     )?;
     ensure!(tables == 4, "Snapshot is missing FactureCraft tables");
+    let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    ensure!(
+        version <= crate::schema::VERSION,
+        "Snapshot comes from a newer FactureCraft (schema {version}); update the application"
+    );
     snapshot(&connection, destination)
 }
 

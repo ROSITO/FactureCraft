@@ -1,5 +1,6 @@
 mod brand;
 mod dashboard;
+mod facturx;
 mod mcp;
 mod operations;
 mod pdf;
@@ -62,6 +63,10 @@ enum Command {
         #[command(subcommand)]
         action: ArchiveAction,
     },
+    Export {
+        #[command(subcommand)]
+        what: ExportKind,
+    },
     Import {
         folder: PathBuf,
         #[arg(long, requires = "source")]
@@ -69,6 +74,22 @@ enum Command {
         #[arg(long)]
         source: Option<String>,
     },
+}
+
+#[derive(Subcommand)]
+enum ExportKind {
+    /// One row per document: totals, status, dates, payments.
+    Documents {
+        output: PathBuf,
+        #[arg(long, value_enum, default_value = "csv")]
+        format: ExportFormat,
+    },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum ExportFormat {
+    Csv,
+    Json,
 }
 
 #[derive(Subcommand)]
@@ -140,6 +161,11 @@ enum DraftAction {
         id: i64,
         output: PathBuf,
     },
+    /// Export a finalized invoice, deposit or credit note as Factur-X (PDF/A-3 + CII XML).
+    Facturx {
+        id: i64,
+        output: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
@@ -195,6 +221,15 @@ fn main() -> Result<()> {
             operations::publish_file(&output, |file| store.snapshot(file.path()))
         }
         Command::Restore { .. } => unreachable!("Handled before opening the database"),
+        Command::Export {
+            what: ExportKind::Documents { output, format },
+        } => operations::write_file(
+            &output,
+            &match format {
+                ExportFormat::Csv => store.export_documents_csv()?,
+                ExportFormat::Json => store.export_documents_json()?,
+            },
+        ),
         Command::Contacts => {
             println!("{}", serde_json::to_string_pretty(&store.contacts()?)?);
             Ok(())
@@ -291,6 +326,9 @@ fn main() -> Result<()> {
                 }
                 DraftAction::Preview { id, output } => {
                     return operations::write_file(&output, &operations::render_draft(&store, id)?);
+                }
+                DraftAction::Facturx { id, output } => {
+                    return operations::write_file(&output, &facturx::export(&store, id)?);
                 }
             };
             println!("{}", serde_json::to_string_pretty(&data)?);

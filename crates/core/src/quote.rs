@@ -4,7 +4,7 @@ use rusqlite::{OptionalExtension, params};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
-#[derive(Default, Deserialize, Serialize)]
+#[derive(Clone, Default, Deserialize, Serialize)]
 pub struct Quote {
     pub recipient: String,
     #[serde(default)]
@@ -35,10 +35,31 @@ pub struct Quote {
     pub terms: String,
     #[serde(default)]
     pub global_discount: String,
+    /// Private labels for filtering and search; never printed.
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// Private notes; never printed.
+    #[serde(default)]
+    pub notes: String,
+    /// Set when the amounts were converted from another currency.
+    #[serde(default)]
+    pub conversion: Option<Conversion>,
     pub lines: Vec<Line>,
 }
 
-#[derive(Deserialize, Serialize)]
+/// Traceability of an explicit currency conversion: `1 from = rate to`.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Conversion {
+    pub from: String,
+    pub to: String,
+    pub rate: String,
+    /// Date of the rate, `YYYY-MM-DD`.
+    pub date: String,
+    /// Where the rate comes from, e.g. a central bank.
+    pub source: String,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
 pub struct Line {
     pub description: String,
     pub quantity: String,
@@ -73,7 +94,27 @@ pub struct TaxBucket {
     pub tax: String,
 }
 
+/// Splits comma-separated tags, trimming and dropping empty or repeated entries.
+pub fn parse_tags(text: &str) -> Vec<String> {
+    let mut tags: Vec<String> = Vec::new();
+    for tag in text.split(',').map(str::trim).filter(|tag| !tag.is_empty()) {
+        if !tags.iter().any(|known| known.eq_ignore_ascii_case(tag)) {
+            tags.push(tag.into());
+        }
+    }
+    tags
+}
+
 impl Quote {
+    /// Whether the lowercase `query` matches a tag or the private notes.
+    pub fn matches_private(&self, query: &str) -> bool {
+        self.notes.to_lowercase().contains(query)
+            || self
+                .tags
+                .iter()
+                .any(|tag| tag.to_lowercase().contains(query))
+    }
+
     pub fn totals(&self, currency: &str) -> Result<(String, String, String)> {
         let precision = currency_precision(currency)?;
         let mut net = Decimal::ZERO;
@@ -184,6 +225,56 @@ fn number(input: &str) -> Result<Decimal> {
 }
 
 impl Store {
+    /// Converts the unit prices of `quote` from `from` to `to` at `rate` (`1 from = rate to`).
+    ///
+    /// Prices are rounded to six decimals, then totals follow the precision of the new currency.
+    /// The rate, its date and its source are kept in [`Quote::conversion`]. A document is
+    /// converted at most once so that the trace always starts from its original currency.
+    pub fn convert_quote(
+        &self,
+        quote: &Quote,
+        from: &str,
+        to: &str,
+        rate: &str,
+        date: &str,
+        source: &str,
+    ) -> Result<Quote> {
+        ensure!(
+            quote.conversion.is_none(),
+            "This document was already converted; discard the changes to start again"
+        );
+        let (from, to) = (
+            from.trim().to_ascii_uppercase(),
+            to.trim().to_ascii_uppercase(),
+        );
+        currency_precision(&from)?;
+        currency_precision(&to)?;
+        ensure!(from != to, "Choose a different currency");
+        self.validate_date(date.trim())?;
+        ensure!(!source.trim().is_empty(), "The rate source is required");
+        let rate = Decimal::from_str_exact(&rate.trim().replace(',', "."))?.normalize();
+        ensure!(
+            rate > Decimal::ZERO && rate <= Decimal::from(1_000_000) && rate.scale() <= 8,
+            "Expected a positive rate with up to eight decimal places"
+        );
+        let mut converted = quote.clone();
+        for line in &mut converted.lines {
+            line.price = (number(&line.price)? * rate)
+                .round_dp(6)
+                .normalize()
+                .to_string();
+        }
+        converted.totals(&to)?;
+        converted.conversion = Some(Conversion {
+            from,
+            to,
+            rate: rate.to_string(),
+            date: date.trim().into(),
+            source: source.trim().into(),
+        });
+        Ok(converted)
+    }
+
     pub fn quote(&self, id: i64) -> Result<Quote> {
         let json: Option<String> = self
             .0
@@ -285,6 +376,117 @@ mod tests {
         assert_eq!(
             quote.totals("EUR").unwrap(),
             ("0.05".into(), "0.01".into(), "0.06".into())
+        );
+    }
+
+    #[test]
+    fn tags_and_notes_roundtrip_and_match() {
+        assert_eq!(parse_tags(" a, B ,,a,c d "), ["a", "B", "c d"]);
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let quote = Quote {
+            recipient: "X".into(),
+            tags: parse_tags("urgent, 2026"),
+            notes: "Relancer Lundi".into(),
+            lines: vec![Line {
+                description: "A".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let draft = store.save_quote(None, "T", "EUR", "fr", &quote).unwrap();
+        let back = store.quote(draft.id).unwrap();
+        assert_eq!(back.tags, ["urgent", "2026"]);
+        assert!(back.matches_private("lundi") && back.matches_private("urg"));
+        assert!(!back.matches_private("zzz"));
+        // Documents saved before tags existed still load.
+        let old: Quote = serde_json::from_str(r#"{"recipient":"X","lines":[]}"#).unwrap();
+        assert!(old.tags.is_empty() && old.notes.is_empty());
+    }
+
+    #[test]
+    fn conversion_rounds_prices_then_totals_and_keeps_the_trace() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let quote = Quote {
+            recipient: "X".into(),
+            lines: vec![
+                Line {
+                    description: "A".into(),
+                    quantity: "3".into(),
+                    price: "19.99".into(),
+                    vat: "20".into(),
+                    ..Default::default()
+                },
+                Line {
+                    description: "B".into(),
+                    price: "100".into(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let converted = store
+            .convert_quote(&quote, "eur", "chf", "0,9312", "2026-11-18", " BCE ")
+            .unwrap();
+        // 19.99 x 0.9312 = 18.614688 (kept to six decimals); 3 x that = 55.844064 -> 55.84.
+        assert_eq!(converted.lines[0].price, "18.614688");
+        assert_eq!(converted.lines[1].price, "93.12");
+        assert_eq!(
+            converted.line_nets("CHF").unwrap(),
+            ["55.84".to_string(), "93.12".to_string()]
+        );
+        assert_eq!(
+            converted.totals("CHF").unwrap(),
+            ("148.96".into(), "11.17".into(), "160.13".into())
+        );
+        let trace = converted.conversion.as_ref().unwrap();
+        assert_eq!(
+            (
+                trace.from.as_str(),
+                trace.to.as_str(),
+                trace.rate.as_str(),
+                trace.source.as_str()
+            ),
+            ("EUR", "CHF", "0.9312", "BCE")
+        );
+        // The original is untouched and the trace survives a save.
+        assert!(quote.conversion.is_none() && quote.lines[0].price == "19.99");
+        let draft = store
+            .save_quote(None, "T", "CHF", "fr", &converted)
+            .unwrap();
+        assert_eq!(
+            store.quote(draft.id).unwrap().conversion,
+            converted.conversion
+        );
+        // Zero-decimal currencies round the totals to whole units.
+        let yen = store
+            .convert_quote(&quote, "EUR", "JPY", "162.5", "2026-11-18", "BCE")
+            .unwrap();
+        assert_eq!(yen.totals("JPY").unwrap().0, "25995");
+    }
+
+    #[test]
+    fn conversion_rejects_invalid_input() {
+        let store = Store::open(std::path::Path::new(":memory:")).unwrap();
+        let quote = Quote::default();
+        let convert = |from, to, rate, date, source| {
+            store
+                .convert_quote(&quote, from, to, rate, date, source)
+                .is_err()
+        };
+        assert!(convert("EUR", "EUR", "1", "2026-11-18", "BCE"));
+        assert!(convert("EUR", "XXX1", "1", "2026-11-18", "BCE"));
+        assert!(convert("EUR", "CHF", "0", "2026-11-18", "BCE"));
+        assert!(convert("EUR", "CHF", "-1", "2026-11-18", "BCE"));
+        assert!(convert("EUR", "CHF", "abc", "2026-11-18", "BCE"));
+        assert!(convert("EUR", "CHF", "0.9", "18/11/2026", "BCE"));
+        assert!(convert("EUR", "CHF", "0.9", "2026-11-18", "  "));
+        let once = store
+            .convert_quote(&quote, "EUR", "CHF", "0.9", "2026-11-18", "BCE")
+            .unwrap();
+        assert!(
+            store
+                .convert_quote(&once, "CHF", "USD", "1.1", "2026-11-18", "BCE")
+                .is_err()
         );
     }
 

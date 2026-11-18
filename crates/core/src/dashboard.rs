@@ -40,6 +40,16 @@ struct Event {
     net: Decimal,
 }
 
+/// Document kind of an archived Facture.net record.
+pub(crate) fn archive_kind(category: &str, kind: Option<&str>) -> &'static str {
+    match (category, kind) {
+        ("quotations", _) => "quote",
+        (_, Some(kind)) if kind.contains("acompte") => "deposit",
+        (_, Some(kind)) if kind.to_lowercase().contains("avoir") => "credit",
+        _ => "invoice",
+    }
+}
+
 impl Store {
     pub fn dashboard(&self, year: i32, currency: &str) -> Result<Dashboard> {
         let currency = currency.trim().to_ascii_uppercase();
@@ -207,12 +217,7 @@ impl Store {
         })?;
         for row in rows {
             let (category, date, currency, kind, number, recipient, net) = row?;
-            let kind = match (category.as_str(), kind.as_deref()) {
-                ("quotations", _) => "quote",
-                (_, Some(kind)) if kind.contains("acompte") => "deposit",
-                (_, Some(kind)) if kind.to_lowercase().contains("avoir") => "credit",
-                _ => "invoice",
-            };
+            let kind = archive_kind(&category, kind.as_deref());
             events.push(Event {
                 date,
                 currency,

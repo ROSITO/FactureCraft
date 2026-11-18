@@ -47,13 +47,6 @@ impl Issuer {
     }
 }
 
-pub(crate) fn initialize(db: &rusqlite::Connection) -> Result<()> {
-    db.execute_batch(
-        "CREATE TABLE IF NOT EXISTS issuer_logo(id INTEGER PRIMARY KEY CHECK(id=1), png BLOB NOT NULL);",
-    )?;
-    Ok(())
-}
-
 impl Store {
     pub fn issuer(&self) -> Result<Issuer> {
         let json: Option<String> = self

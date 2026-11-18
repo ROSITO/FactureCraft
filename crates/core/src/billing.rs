@@ -1,46 +1,8 @@
 use crate::{Draft, Store, idempotency, quote::Quote};
 use anyhow::{Context, Result, ensure};
-use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
+use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
 use rust_decimal::Decimal;
 use serde::Serialize;
-
-pub(crate) fn initialize(db: &Connection) -> Result<()> {
-    db.execute_batch("PRAGMA foreign_keys=ON;
-        BEGIN IMMEDIATE;
-        CREATE TABLE IF NOT EXISTS billing (
-            id INTEGER PRIMARY KEY REFERENCES drafts(id), kind TEXT NOT NULL DEFAULT 'quote',
-            version INTEGER NOT NULL DEFAULT 1, source_id INTEGER REFERENCES drafts(id),
-            accepted_date TEXT, number TEXT UNIQUE, pdf BLOB, issued_at TEXT);
-        INSERT OR IGNORE INTO billing(id) SELECT id FROM drafts;
-        CREATE TRIGGER IF NOT EXISTS billing_new AFTER INSERT ON drafts
-          BEGIN INSERT INTO billing(id) VALUES(NEW.id); END;
-        CREATE TRIGGER IF NOT EXISTS billing_edit BEFORE UPDATE ON drafts
-          BEGIN SELECT RAISE(ABORT,'Finalized document is immutable') WHERE
-            EXISTS(SELECT 1 FROM billing WHERE id=OLD.id AND number IS NOT NULL); END;
-        CREATE TRIGGER IF NOT EXISTS billing_version AFTER UPDATE ON drafts
-          BEGIN UPDATE billing SET version=version+1 WHERE id=NEW.id; END;
-        CREATE TABLE IF NOT EXISTS billing_sequence(kind TEXT PRIMARY KEY, last INTEGER NOT NULL);
-        CREATE TABLE IF NOT EXISTS billing_payment(id INTEGER PRIMARY KEY, document_id INTEGER NOT NULL REFERENCES billing(id),
-            amount TEXT NOT NULL, date TEXT NOT NULL, method TEXT NOT NULL, reference TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS billing_allocation(deposit_id INTEGER PRIMARY KEY REFERENCES billing(id),
-            invoice_id INTEGER NOT NULL REFERENCES billing(id), amount TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS issuer_profile(id INTEGER PRIMARY KEY CHECK(id=1), details TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS issuer_snapshot(document_id INTEGER PRIMARY KEY REFERENCES billing(id), details TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
-        COMMIT;")?;
-    // Added after the first release: a refused or cancelled quote.
-    let closed: bool = db.query_row(
-        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('billing') WHERE name='closed')",
-        [],
-        |row| row.get(0),
-    )?;
-    if !closed {
-        db.execute_batch(
-            "ALTER TABLE billing ADD COLUMN closed TEXT; ALTER TABLE billing ADD COLUMN closed_date TEXT;",
-        )?;
-    }
-    Ok(())
-}
 
 #[derive(Debug, Serialize)]
 pub struct BillingState {
@@ -194,6 +156,30 @@ impl Store {
         Ok(())
     }
 
+    /// Invoice draft from an accepted quote keeping only the lines at `line_indexes`.
+    pub fn derive_invoice_with_lines(
+        &self,
+        id: i64,
+        expected_version: i64,
+        line_indexes: &[usize],
+        title: &str,
+    ) -> Result<Draft> {
+        let shape = Shape::Lines(line_indexes.to_vec());
+        self.derive_shaped(id, Some(expected_version), "invoice", title, None, &shape)
+    }
+
+    /// Deposit draft for a share of an accepted quote (see [`Share`]).
+    pub fn derive_deposit(
+        &self,
+        id: i64,
+        expected_version: i64,
+        share: &Share,
+        title: &str,
+    ) -> Result<Draft> {
+        let shape = Shape::Deposit(share.clone());
+        self.derive_shaped(id, Some(expected_version), "deposit", title, None, &shape)
+    }
+
     pub fn derive_document(&self, id: i64, kind: &str, title: &str) -> Result<Draft> {
         self.derive(id, None, kind, title, None)
     }
@@ -224,8 +210,22 @@ impl Store {
         title: &str,
         key: Option<&str>,
     ) -> Result<Draft> {
+        self.derive_shaped(id, expected, kind, title, key, &Shape::All)
+    }
+    fn derive_shaped(
+        &self,
+        id: i64,
+        expected: Option<i64>,
+        kind: &str,
+        title: &str,
+        key: Option<&str>,
+        shape: &Shape,
+    ) -> Result<Draft> {
         let tx = self.billing_transaction()?;
-        let request = serde_json::to_string(&("derive", id, expected, kind, title))?;
+        let mut request = serde_json::to_string(&("derive", id, expected, kind, title))?;
+        if !matches!(shape, Shape::All) {
+            request.push_str(&format!("{shape:?}"));
+        }
         if let Some(key) = key
             && let Some(previous) = idempotency::lookup(&tx, key, &request)?
         {
@@ -246,6 +246,22 @@ impl Store {
             "Invalid document transition"
         );
         let mut content = self.quote(id)?;
+        match shape {
+            Shape::All => {}
+            Shape::Lines(indexes) => {
+                content.lines = select_lines(&content.lines, indexes)?;
+            }
+            Shape::Deposit(share) => {
+                let number = state.number.as_deref().unwrap_or_default();
+                deposit_lines(
+                    &mut content,
+                    &source.currency,
+                    &source.language,
+                    number,
+                    share,
+                )?;
+            }
+        }
         if matches!(kind, "invoice" | "deposit") && content.due_date.trim().is_empty() {
             // Editable default; finalization requires a due date.
             content.due_date = self.date_in_days(30)?;
@@ -578,6 +594,97 @@ impl Store {
     }
 }
 
+/// How a derived document is built from its source.
+#[derive(Debug)]
+enum Shape {
+    All,
+    Lines(Vec<usize>),
+    Deposit(Share),
+}
+
+/// Part of a quote billed by a deposit: a percentage of its gross total or a gross amount.
+#[derive(Clone, Debug)]
+pub enum Share {
+    Percent(String),
+    Amount(String),
+}
+
+fn select_lines(
+    lines: &[crate::quote::Line],
+    indexes: &[usize],
+) -> Result<Vec<crate::quote::Line>> {
+    let mut sorted = indexes.to_vec();
+    sorted.sort_unstable();
+    sorted.dedup();
+    ensure!(!sorted.is_empty(), "Select at least one line");
+    ensure!(
+        sorted.iter().all(|&index| index < lines.len()),
+        "Unknown line selected"
+    );
+    Ok(sorted
+        .into_iter()
+        .map(|index| lines[index].clone())
+        .collect())
+}
+
+/// Replaces the lines of `content` by the requested share of the quote.
+///
+/// The share is applied to the net of every tax bucket (already net of the global discount), so
+/// each bucket keeps its own rate or exemption reason and VAT stays exact. A quote with a single
+/// rate, or none, yields a single line.
+fn deposit_lines(
+    content: &mut Quote,
+    currency: &str,
+    language: &str,
+    number: &str,
+    share: &Share,
+) -> Result<()> {
+    let hundred = Decimal::from(100);
+    let parse = |text: &str| -> Result<Decimal> {
+        Ok(Decimal::from_str_exact(&text.trim().replace(',', "."))?)
+    };
+    let buckets = content.tax_breakdown(currency)?;
+    let gross = Decimal::from_str_exact(&content.totals(currency)?.2)?;
+    ensure!(gross > Decimal::ZERO, "The quote has no amount to bill");
+    let ratio = match share {
+        Share::Percent(text) => parse(text)? / hundred,
+        Share::Amount(text) => parse(text)? / gross,
+    };
+    ensure!(
+        ratio > Decimal::ZERO && ratio <= Decimal::ONE,
+        "A deposit must be above 0 and at most the quote total"
+    );
+    let percent = (ratio * hundred).round_dp(2).normalize();
+    let multiple = buckets.len() > 1;
+    let mut lines = Vec::new();
+    for bucket in buckets {
+        let net = Decimal::from_str_exact(&bucket.net)?;
+        let rate = Decimal::from_str_exact(&bucket.rate)?;
+        let mut description = if language == "en" {
+            format!("Deposit of {percent}% on quote {number}")
+        } else {
+            format!("Acompte de {percent} % sur devis {number}")
+        };
+        if multiple {
+            description.push_str(&format!(
+                " ({} {rate} %)",
+                if language == "en" { "VAT" } else { "TVA" }
+            ));
+        }
+        lines.push(crate::quote::Line {
+            description,
+            // Unit prices carry up to six decimals; the line total rounds to the currency.
+            price: (net * ratio).round_dp(6).normalize().to_string(),
+            vat: rate.to_string(),
+            exemption_reason: bucket.exemption_reason,
+            ..Default::default()
+        });
+    }
+    content.lines = lines;
+    content.global_discount.clear();
+    Ok(())
+}
+
 fn prefix(kind: &str) -> Result<&'static str> {
     Ok(match kind {
         "quote" => "D",
@@ -722,6 +829,141 @@ mod tests {
         Ok(())
     }
 
+    fn accepted_quote(store: &Store, quote: &Quote) -> Result<i64> {
+        let id = store.save_quote(None, "Devis", "EUR", "fr", quote)?.id;
+        store.finalize_document(id, render)?;
+        store.accept_quote(id, "2026-11-18")?;
+        Ok(id)
+    }
+
+    fn mixed_quote() -> Quote {
+        let line = |description: &str, price: &str, vat: &str, reason: &str| crate::quote::Line {
+            description: description.into(),
+            price: price.into(),
+            vat: vat.into(),
+            exemption_reason: reason.into(),
+            ..Default::default()
+        };
+        Quote {
+            recipient: "Client de test".into(),
+            lines: vec![
+                line("A", "100", "20", ""),
+                line("B", "50", "10", ""),
+                line("C", "30", "0", "Motif de test"),
+            ],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn invoice_keeps_only_selected_lines() -> Result<()> {
+        let store = Store::open(std::path::Path::new(":memory:"))?;
+        let id = accepted_quote(&store, &mixed_quote())?;
+        let version = store.billing_state(id)?.version;
+        assert!(
+            store
+                .derive_invoice_with_lines(id, version, &[], "F")
+                .is_err()
+        );
+        assert!(
+            store
+                .derive_invoice_with_lines(id, version, &[3], "F")
+                .is_err()
+        );
+        assert!(
+            store
+                .derive_invoice_with_lines(id, version + 1, &[0], "F")
+                .is_err()
+        );
+        let invoice = store.derive_invoice_with_lines(id, version, &[2, 0, 0], "F")?;
+        let content = store.quote(invoice.id)?;
+        assert_eq!(content.lines.len(), 2);
+        assert_eq!(content.lines[0].description, "A");
+        assert_eq!(
+            content.totals("EUR")?,
+            ("130.00".into(), "20.00".into(), "150.00".into())
+        );
+        let state = store.billing_state(invoice.id)?;
+        assert_eq!(
+            (state.kind.as_str(), state.source_id),
+            ("invoice", Some(id))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn deposit_percentage_follows_each_tax_bucket() -> Result<()> {
+        let store = Store::open(std::path::Path::new(":memory:"))?;
+        let id = accepted_quote(&store, &mixed_quote())?;
+        let version = store.billing_state(id)?.version;
+        // Quote: net 180.00, VAT 25.00, gross 205.00.
+        let deposit = store.derive_deposit(id, version, &Share::Percent("30".into()), "Acompte")?;
+        let content = store.quote(deposit.id)?;
+        assert_eq!(content.lines.len(), 3);
+        assert_eq!(
+            content.lines[1].description,
+            "Acompte de 30 % sur devis TEST-D-000001 (TVA 10 %)"
+        );
+        assert_eq!(content.lines[0].exemption_reason, "Motif de test");
+        // 30 % of each bucket: 15 + 30 + 9 net, VAT 1.50 + 6.00.
+        assert_eq!(
+            content.totals("EUR")?,
+            ("54.00".into(), "7.50".into(), "61.50".into())
+        );
+        assert!(!content.due_date.is_empty());
+        assert!(
+            store
+                .derive_deposit(id, version, &Share::Percent("0".into()), "A")
+                .is_err()
+        );
+        assert!(
+            store
+                .derive_deposit(id, version, &Share::Percent("100.01".into()), "A")
+                .is_err()
+        );
+        assert!(
+            store
+                .derive_deposit(id, version, &Share::Amount("205.01".into()), "A")
+                .is_err()
+        );
+        let full = store.derive_deposit(id, version, &Share::Percent("100".into()), "A")?;
+        assert_eq!(store.quote(full.id)?.totals("EUR")?.2, "205.00");
+        Ok(())
+    }
+
+    #[test]
+    fn deposit_amount_on_single_rate_quote_is_exact_to_the_cent() -> Result<()> {
+        let store = Store::open(std::path::Path::new(":memory:"))?;
+        let id = accepted_quote(&store, &example("100"))?; // 100.00 at 0 % without exemption
+        let version = store.billing_state(id)?.version;
+        let deposit = store.derive_deposit(id, version, &Share::Amount("33,33".into()), "A")?;
+        let content = store.quote(deposit.id)?;
+        assert_eq!(content.lines.len(), 1);
+        assert_eq!(
+            content.lines[0].description,
+            "Acompte de 33.33 % sur devis TEST-D-000001"
+        );
+        assert_eq!(content.totals("EUR")?.2, "33.33");
+        let vat_quote = Quote {
+            lines: vec![crate::quote::Line {
+                description: "A".into(),
+                price: "100".into(),
+                vat: "20".into(),
+                ..Default::default()
+            }],
+            ..example("1")
+        };
+        let id = accepted_quote(&store, &vat_quote)?;
+        let version = store.billing_state(id)?.version;
+        let deposit = store.derive_deposit(id, version, &Share::Amount("50".into()), "A")?;
+        // 50.00 gross is 41.666667 net, rounded to 41.67 with 8.33 VAT.
+        assert_eq!(
+            store.quote(deposit.id)?.totals("EUR")?,
+            ("41.67".into(), "8.33".into(), "50.00".into())
+        );
+        Ok(())
+    }
+
     #[test]
     fn live_numbering_continues_the_imported_series() -> Result<()> {
         let store = Store::open(std::path::Path::new(":memory:"))?;
@@ -731,8 +973,7 @@ mod tests {
             |r| Ok((r.get(0)?, r.get(1)?)),
         )?;
         store.0.execute_batch(&format!(
-            "CREATE TABLE facture_net_archive (source TEXT, category TEXT, source_key TEXT, content BLOB, record_link TEXT);
-            INSERT INTO facture_net_archive VALUES
+            "INSERT INTO facture_net_archive VALUES
               ('s','invoices','1',CAST('{{\"uid\":\"F01{year}00003\",\"type\":\"Facture\",\"createdAt\":1,\"pricePretax\":100.5}}' AS BLOB),NULL),
               ('s','invoices','2',CAST('{{\"uid\":\"F019900042\"}}' AS BLOB),NULL);"
         ))?;

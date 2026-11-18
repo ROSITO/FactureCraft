@@ -584,6 +584,37 @@ pub fn render(document: &Document<'_>) -> Result<Vec<u8>> {
         layout.text(RIGHT - 1.0, 8.5, amount, INK, *bold, Align::Right);
         layout.y += 5.5;
     }
+    if let Some(conversion) = &quote.conversion {
+        let rate = rust_decimal::Decimal::from_str_exact(&conversion.rate).map_or_else(
+            |_| conversion.rate.clone(),
+            |rate| rate.normalize().to_string(),
+        );
+        let line = if fr {
+            format!(
+                "Montants convertis de {} au taux 1 {} = {} {} ({}, {})",
+                conversion.from,
+                conversion.from,
+                rate.replace('.', ","),
+                conversion.to,
+                conversion.source,
+                short_date(&conversion.date, true)
+            )
+        } else {
+            format!(
+                "Amounts converted from {} at 1 {} = {} {} ({}, {})",
+                conversion.from,
+                conversion.from,
+                rate,
+                conversion.to,
+                conversion.source,
+                conversion.date
+            )
+        };
+        layout.ensure(5.0);
+        layout.y += 1.0;
+        layout.text(RIGHT, 7.5, &line, LABEL, false, Align::Right);
+        layout.y += 4.0;
+    }
     if invoice {
         // Mandatory on B2B invoices: late-payment penalties and recovery indemnity.
         layout.y += 3.0;
@@ -980,6 +1011,65 @@ mod tests {
         assert!(bytes.starts_with(b"%PDF-"));
         assert!(bytes.windows(5).any(|bytes| bytes == b"%%EOF"));
         assert_eq!(long_date("2026-10-25", true), "25 octobre 2026");
+    }
+
+    #[test]
+    fn renders_a_converted_quote_with_private_fields_in_both_languages() {
+        let quote = Quote {
+            recipient: "Client".into(),
+            tags: vec!["interne".into()],
+            notes: "note privée".into(),
+            conversion: Some(facturecraft_core::quote::Conversion {
+                from: "EUR".into(),
+                to: "CHF".into(),
+                rate: "0.9312".into(),
+                date: "2026-11-18".into(),
+                source: "BCE".into(),
+            }),
+            lines: vec![QuoteLine {
+                description: "Prestation".into(),
+                price: "93.12".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let issuer = Issuer::default();
+        let render_in = |language| {
+            render(&Document {
+                kind: "quote",
+                number: None,
+                date: "2026-11-18",
+                title: "Devis",
+                currency: "CHF",
+                language,
+                quote: &quote,
+                issuer: &issuer,
+                logo: None,
+                applied_deposit: None,
+            })
+            .unwrap()
+        };
+        let (fr, en) = (render_in("fr"), render_in("en"));
+        assert!(fr.starts_with(b"%PDF-") && en.starts_with(b"%PDF-"));
+        // The converted line adds content compared with the same quote without conversion.
+        let plain = Quote {
+            conversion: None,
+            ..quote.clone()
+        };
+        let without = render(&Document {
+            kind: "quote",
+            number: None,
+            date: "2026-11-18",
+            title: "Devis",
+            currency: "CHF",
+            language: "fr",
+            quote: &plain,
+            issuer: &issuer,
+            logo: None,
+            applied_deposit: None,
+        })
+        .unwrap();
+        assert_ne!(fr, without);
     }
 
     #[test]

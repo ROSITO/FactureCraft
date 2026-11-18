@@ -3,6 +3,8 @@ use anyhow::Result;
 use eframe::egui;
 use facturecraft_core::{Draft, Store};
 
+mod data_settings;
+
 use crate::brand::{AMBER, CREAM, INK, Tone, accent};
 use facturecraft_core::{billing::BillingState, products::Product};
 
@@ -128,6 +130,10 @@ pub fn run(store: Store, language: Option<Language>) -> Result<()> {
                 archive_items: Vec::new(),
                 archive_query: String::new(),
                 quote_query: String::new(),
+                tags_text: String::new(),
+                derive_dialog: None,
+                convert_form: None,
+                client_detail: None,
                 confirm_discard: false,
                 close_pending: false,
                 notice: None,
@@ -213,6 +219,14 @@ struct Drafts {
     archive_items: Vec<facturecraft_core::import::ArchiveItem>,
     archive_query: String,
     quote_query: String,
+    /// Comma-separated tags being edited in the document editor.
+    tags_text: String,
+    /// Open invoice or deposit dialog of the document under review.
+    derive_dialog: Option<(i64, DeriveDialog)>,
+    /// Target currency, rate, rate date and source typed in the conversion form.
+    convert_form: Option<[String; 4]>,
+    /// Client whose history card is open, with its documents.
+    client_detail: Option<(String, facturecraft_core::contacts::ClientHistory)>,
     confirm_discard: bool,
     close_pending: bool,
     notice: Option<String>,
@@ -248,6 +262,16 @@ struct Drafts {
     status_filter: usize,
     /// Untinted logo, recoloured when the theme changes.
     logo_source: image::RgbaImage,
+}
+
+/// Choices made before deriving an invoice or deposit from an accepted quote.
+enum DeriveDialog {
+    /// One flag per quote line, set when the line goes on the invoice.
+    Invoice(Vec<bool>),
+    Deposit {
+        amount: bool,
+        value: String,
+    },
 }
 
 /// Localized status of a document, coloured like the brand kit badges.
@@ -430,6 +454,13 @@ impl Drafts {
             }
             Err(error) => self.error = Some(error.to_string()),
         }
+        if let Some((name, _)) = &self.client_detail {
+            self.client_detail = self
+                .store
+                .client_history(name)
+                .ok()
+                .map(|history| (name.clone(), history));
+        }
     }
 }
 
@@ -592,6 +623,8 @@ impl eframe::App for Drafts {
                         self.issuer_settings(ui, fr);
                         ui.add_space(18.0);
                         self.numbering_settings(ui, fr);
+                        ui.add_space(18.0);
+                        self.data_settings(ui, fr);
                     });
                     return;
                 }
@@ -653,6 +686,54 @@ impl eframe::App for Drafts {
                             "Search clients or companies",
                         )),
                     );
+                    let mut open_review = None;
+                    let mut close_client = false;
+                    if let Some((name, history)) = &self.client_detail {
+                        crate::brand::card(ui, |ui| {
+                            ui.set_min_width(ui.available_width());
+                            ui.horizontal(|ui| {
+                                crate::brand::card_title(ui, &format!("{} · {name}", t("Historique", "History")));
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    close_client = ui.button(t("Fermer", "Close")).clicked();
+                                });
+                            });
+                            if history.documents.is_empty() && history.archived.is_empty() {
+                                ui.weak(t("Aucun document pour ce nom de destinataire.", "No document for this recipient name."));
+                            }
+                            for document in &history.documents {
+                                ui.horizontal_wrapped(|ui| {
+                                    let (label, tone) = status(&document.state, fr);
+                                    crate::brand::badge(ui, label, tone);
+                                    ui.label(format!("{} {}", kind_name(&document.state.kind, fr), document.state.number.as_deref().unwrap_or(&document.draft.title)));
+                                    ui.weak(&document.date);
+                                    ui.strong(crate::brand::money(&document.gross, &document.draft.currency, fr));
+                                    if matches!(document.state.kind.as_str(), "invoice" | "deposit") && document.state.number.is_some() {
+                                        ui.weak(format!("{}: {}", t("Reste à payer", "Outstanding"), crate::brand::money(&document.state.outstanding, &document.draft.currency, fr)));
+                                    }
+                                    if ui.button(t("Voir et agir", "Review and actions")).clicked() {
+                                        open_review = Some((document.draft.id, document.state.version));
+                                    }
+                                });
+                            }
+                            if !history.archived.is_empty() {
+                                crate::brand::section(ui, t("Archives Facture.net (lecture seule)", "Facture.net archive (read only)"));
+                            }
+                            for document in &history.archived {
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.label(format!("{} {}", kind_name(document.kind, fr), document.number));
+                                    ui.weak(&document.date);
+                                    ui.strong(format!("{} HT", crate::brand::money(&document.net, &document.currency, fr)));
+                                });
+                            }
+                        });
+                    }
+                    if close_client {
+                        self.client_detail = None;
+                    }
+                    if let Some((id, version)) = open_review {
+                        self.review = Some(id);
+                        self.review_version = version;
+                    }
                     let query = self.contact_query.trim().to_lowercase();
                     egui::ScrollArea::vertical()
                         .id_salt("contacts")
@@ -660,6 +741,7 @@ impl eframe::App for Drafts {
                             let mut found = false;
                             let mut edit_contact = None;
                             let mut delete_contact = None;
+                            let mut open_client = None;
                             for contact in &self.contacts {
                                 if ![&contact.name, &contact.email, &contact.address]
                                     .iter()
@@ -672,7 +754,9 @@ impl eframe::App for Drafts {
                                         ui.set_min_width(ui.available_width());
                                         ui.horizontal(|ui| {
                                             ui.vertical(|ui| {
-                                                ui.strong(&contact.name);
+                                                if ui.add(egui::Label::new(egui::RichText::new(&contact.name).strong()).sense(egui::Sense::click())).on_hover_text(t("Voir l’historique", "View history")).clicked() {
+                                                    open_client = Some(contact.name.clone());
+                                                }
                                                 for field in [&contact.email, &contact.address.replace('\n', ", "), &contact.registration] {
                                                     if !field.is_empty() {
                                                         ui.weak(field);
@@ -680,6 +764,9 @@ impl eframe::App for Drafts {
                                                 }
                                             });
                                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                                if ui.button(t("Historique", "History")).clicked() {
+                                                    open_client = Some(contact.name.clone());
+                                                }
                                                 match contact.id {
                                                     Some(id) => {
                                                         if self.confirm_delete_contact == Some(id) {
@@ -708,6 +795,12 @@ impl eframe::App for Drafts {
                             }
                             if let Some(contact) = edit_contact {
                                 self.new_contact = Some(contact);
+                            }
+                            if let Some(name) = open_client {
+                                match self.store.client_history(&name) {
+                                    Ok(history) => self.client_detail = Some((name, history)),
+                                    Err(error) => self.error = Some(error.to_string()),
+                                }
                             }
                             if let Some(id) = delete_contact {
                                 self.confirm_delete_contact = None;
@@ -738,6 +831,7 @@ impl eframe::App for Drafts {
                     }
                     let query = self.archive_query.trim().to_lowercase();
                     egui::ScrollArea::vertical().show(ui, |ui| {
+                        let mut pdf_action: Option<(&facturecraft_core::import::ArchiveItem, bool)> = None;
                         for item in &self.archive_items {
                             if !format!("{} {} {}", item.label, item.category, item.key)
                                 .to_lowercase()
@@ -745,13 +839,46 @@ impl eframe::App for Drafts {
                             {
                                 continue;
                             }
+                            // The PDF row carries the link to its record, not the other way round.
+                            let pdf = if item.category == "pdf" {
+                                Some(item)
+                            } else {
+                                let link = format!("{}:{}", item.category, item.key);
+                                self.archive_items.iter().find(|other| {
+                                    other.category == "pdf" && other.source == item.source && other.record_link.as_deref() == Some(link.as_str())
+                                })
+                            };
                             ui.horizontal_wrapped(|ui| {
                                 ui.strong(&item.label);
                                 ui.weak(format!("{} · {}", item.category, item.source));
                                 if let Some(link) = &item.record_link {
                                     ui.weak(link);
                                 }
+                                if let Some(pdf) = pdf {
+                                    if ui.small_button(t("Ouvrir le PDF", "Open PDF")).clicked() {
+                                        pdf_action = Some((pdf, false));
+                                    }
+                                    if ui.small_button(t("Enregistrer le PDF…", "Save PDF…")).clicked() {
+                                        pdf_action = Some((pdf, true));
+                                    }
+                                }
                             });
+                        }
+                        if let Some((pdf, save)) = pdf_action {
+                            let result = self.store.archive_pdf(&pdf.source, &pdf.key).and_then(|bytes| {
+                                if save {
+                                    let name = pdf.key.rsplit('/').next().unwrap_or("document.pdf");
+                                    match rfd::FileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(name).save_file() {
+                                        Some(path) => crate::operations::write_file(&path, &bytes),
+                                        None => Ok(()),
+                                    }
+                                } else {
+                                    crate::operations::open_pdf(&bytes)
+                                }
+                            });
+                            if let Err(error) = result {
+                                self.error = Some(error.to_string());
+                            }
                         }
                     });
                     return;
@@ -800,6 +927,8 @@ impl eframe::App for Drafts {
                                 }
                             }
                             self.quote = self.new_quote();
+                            self.tags_text.clear();
+                            self.convert_form = None;
                             if self.page == Page::Invoices {
                                 self.quote.due_date = self.store.date_in_days(30).unwrap_or_default();
                             }
@@ -844,6 +973,49 @@ impl eframe::App for Drafts {
                                             },
                                         );
                                     });
+                                    if let Some(trace) = &self.quote.conversion {
+                                        ui.weak(format!("{} {} → {} · 1 {} = {} {} ({}, {})", t("Converti de", "Converted from"), trace.from, trace.to, trace.from, trace.rate, trace.to, trace.source, trace.date));
+                                    } else if self.convert_form.is_none() && ui.button(t("Convertir dans une autre devise…", "Convert to another currency…")).clicked() {
+                                        self.convert_form = Some([String::new(), String::new(), self.store.today().unwrap_or_default(), String::new()]);
+                                    }
+                                    if let Some([target, rate, date, source]) = &mut self.convert_form {
+                                        let mut finished = false;
+                                        crate::brand::card(ui, |ui| {
+                                            ui.horizontal_wrapped(|ui| {
+                                                ui.label(t("Devise cible", "Target currency"));
+                                                currency_picker(ui, "convert_target", target, fr);
+                                                ui.label(format!("1 {} =", self.currency.trim().to_uppercase()));
+                                                ui.add(crate::brand::field(rate).desired_width(80.0));
+                                                ui.label(target.as_str());
+                                            });
+                                            ui.horizontal_wrapped(|ui| {
+                                                ui.label(t("Date du taux (AAAA-MM-JJ)", "Rate date (YYYY-MM-DD)"));
+                                                ui.add(crate::brand::field(date).desired_width(100.0));
+                                                ui.label(t("Source", "Source"));
+                                                ui.add(crate::brand::field(source).hint_text("BCE").desired_width(120.0));
+                                            });
+                                            ui.weak(t("Les prix unitaires sont convertis (6 décimales) ; le taux, sa date et sa source sont imprimés sous les totaux. Une seule conversion par document.", "Unit prices are converted (6 decimals); the rate, its date and source are printed under the totals. One conversion per document."));
+                                            ui.horizontal(|ui| {
+                                                if ui.button(t("Convertir", "Convert")).clicked() {
+                                                    match self.store.convert_quote(&self.quote, &self.currency, target, rate, date, source) {
+                                                        Ok(converted) => {
+                                                            self.quote = converted;
+                                                            self.currency = target.trim().to_uppercase();
+                                                            self.error = None;
+                                                            finished = true;
+                                                        }
+                                                        Err(error) => self.error = Some(error.to_string()),
+                                                    }
+                                                }
+                                                if ui.button(t("Annuler", "Cancel")).clicked() {
+                                                    finished = true;
+                                                }
+                                            });
+                                        });
+                                        if finished {
+                                            self.convert_form = None;
+                                        }
+                                    }
                                     ui.label(t("Destinataire", "Recipient"));
                                     egui::ComboBox::from_id_salt("recipient_book")
                                         .selected_text(t(
@@ -1008,6 +1180,12 @@ impl eframe::App for Drafts {
                                         });
                                         ui.add(crate::brand::area(&mut self.quote.cgv).desired_rows(14).desired_width(f32::INFINITY));
                                     });
+                                    ui.label(t("Étiquettes (séparées par des virgules, privées)", "Tags (comma-separated, private)"));
+                                    if ui.add(crate::brand::field(&mut self.tags_text).desired_width(f32::INFINITY)).changed() {
+                                        self.quote.tags = facturecraft_core::quote::parse_tags(&self.tags_text);
+                                    }
+                                    ui.label(t("Notes internes (jamais imprimées sur le PDF)", "Internal notes (never printed on the PDF)"));
+                                    ui.add(crate::brand::area(&mut self.quote.notes).desired_rows(3).desired_width(f32::INFINITY));
                                     ui.weak(t("Mise en forme : **gras**, « # » en début de ligne pour un intertitre, ligne vide pour un nouveau paragraphe. Valable dans les descriptions, les conditions et les CGV.", "Formatting: **bold**, “# ” at line start for a subheading, blank line for a new paragraph. Works in descriptions, conditions and terms of sale."));
                                     ui.horizontal_wrapped(|ui| {
                                         if ui
@@ -1126,6 +1304,9 @@ impl eframe::App for Drafts {
                                 self.editing = None;
                                 self.title.clear();
                                 self.quote = self.new_quote();
+                                self.tags_text.clear();
+                                self.convert_form = None;
+                            self.convert_form = None;
                                 self.currency = self.default_currency.clone();
                                 self.document_language = self.default_document_language;
                                 self.error = None;
@@ -1156,7 +1337,7 @@ impl eframe::App for Drafts {
                     ui.horizontal(|ui| {
                         ui.add(
                             crate::brand::field(&mut self.quote_query)
-                                .hint_text(t("Rechercher : titre, client, numéro", "Search: title, client, number")),
+                                .hint_text(t("Rechercher : titre, client, numéro, étiquette, note", "Search: title, client, number, tag, note")),
                         );
                         egui::ComboBox::from_id_salt("status_filter")
                             .selected_text(if fr { STATUS_FILTERS[self.status_filter].0 } else { STATUS_FILTERS[self.status_filter].1 })
@@ -1179,11 +1360,12 @@ impl eframe::App for Drafts {
                             if !matches_filter(self.status_filter, &state, fr) {
                                 continue;
                             }
-                            let recipient = self.store.quote(draft.id).map(|q| q.recipient).unwrap_or_default();
-                            if ![draft.title.as_str(), recipient.as_str(), state.number.as_deref().unwrap_or("")]
+                            let content = self.store.quote(draft.id).unwrap_or_default();
+                            if ![draft.title.as_str(), content.recipient.as_str(), state.number.as_deref().unwrap_or("")]
                                 .iter()
                                 .any(|field| field.to_lowercase().contains(&query))
                                 && !draft.id.to_string().contains(&query)
+                                && !content.matches_private(&query)
                             {
                                 continue;
                             }
@@ -1200,6 +1382,13 @@ impl eframe::App for Drafts {
                                             }
                                         });
                                     });
+                                    if !content.tags.is_empty() {
+                                        ui.horizontal_wrapped(|ui| {
+                                            for tag in &content.tags {
+                                                crate::brand::badge(ui, tag, Tone::Draft);
+                                            }
+                                        });
+                                    }
                                     ui.weak(format!(
                                         "{} {}  ·  {}  ·  {}",
                                         kind_name(&state.kind, fr),
@@ -1241,6 +1430,8 @@ impl eframe::App for Drafts {
                             } else {
                                 Language::Fr
                             };
+                            self.tags_text = quote.tags.join(", ");
+                            self.convert_form = None;
                             self.quote = quote;
                             self.composing = true;
                             self.error = None;
@@ -1347,6 +1538,9 @@ impl eframe::App for Drafts {
                         if ui.button(t("Exporter le PDF figé", "Export finalized PDF")).clicked() {
                             match self.store.finalized_pdf(id) { Ok(bytes) => if let Some(path) = rfd::FileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(format!("{}.pdf", state.number.as_deref().unwrap_or("document"))).save_file() && let Err(error) = crate::operations::write_file(&path, &bytes) { self.error = Some(error.to_string()); }, Err(error) => self.error = Some(error.to_string()) }
                         }
+                        if matches!(state.kind.as_str(), "invoice" | "deposit" | "credit") && ui.button(t("Exporter en Factur-X", "Export as Factur-X")).clicked() {
+                            match crate::facturx::export(&self.store, id) { Ok(bytes) => if let Some(path) = rfd::FileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(format!("{}-facturx.pdf", state.number.as_deref().unwrap_or("document"))).save_file() && let Err(error) = crate::operations::write_file(&path, &bytes) { self.error = Some(error.to_string()); }, Err(error) => self.error = Some(error.to_string()) }
+                        }
                         if state.kind == "quote" && !state.accepted && state.closed.is_none() {
                             ui.horizontal(|ui| { ui.label(t("Date (AAAA-MM-JJ)", "Date (YYYY-MM-DD)")); ui.add(crate::brand::field(&mut self.event_date)); });
                             ui.horizontal(|ui| {
@@ -1356,10 +1550,57 @@ impl eframe::App for Drafts {
                                 }
                             });
                         }
-                        if state.kind == "quote" && state.accepted {
-                            for (kind, label) in [("invoice", t("Créer une facture", "Create invoice")), ("deposit", t("Créer un acompte", "Create deposit"))] {
-                                if ui.button(label).clicked() { match self.store.derive_document(id, kind, &draft.title) { Ok(_) => { self.page = Page::Invoices; self.review = None; self.refresh(); }, Err(error) => self.error = Some(error.to_string()) } }
+                        if state.kind == "quote" && state.accepted && state.closed.is_none() {
+                            let mut done = false;
+                            match &mut self.derive_dialog {
+                                Some((dialog_id, DeriveDialog::Invoice(selected))) if *dialog_id == id => {
+                                    crate::brand::section(ui, t("Lignes à facturer", "Lines to invoice"));
+                                    for (line, keep) in quote.lines.iter().zip(selected.iter_mut()) {
+                                        ui.checkbox(keep, format!("{} × {} · {}", line.quantity, line.description, line.price));
+                                    }
+                                    ui.horizontal(|ui| {
+                                        if ui.button(t("Créer la facture", "Create invoice")).clicked() {
+                                            let indexes: Vec<usize> = selected.iter().enumerate().filter(|(_, keep)| **keep).map(|(index, _)| index).collect();
+                                            match self.store.derive_invoice_with_lines(id, state.version, &indexes, &draft.title) {
+                                                Ok(_) => { self.page = Page::Invoices; self.review = None; done = true; }
+                                                Err(error) => self.error = Some(error.to_string()),
+                                            }
+                                        }
+                                        if ui.button(t("Annuler", "Cancel")).clicked() { done = true; }
+                                    });
+                                }
+                                Some((dialog_id, DeriveDialog::Deposit { amount, value })) if *dialog_id == id => {
+                                    crate::brand::section(ui, t("Acompte", "Deposit"));
+                                    ui.horizontal(|ui| {
+                                        ui.selectable_value(amount, false, t("Pourcentage", "Percentage"));
+                                        ui.selectable_value(amount, true, t("Montant TTC", "Gross amount"));
+                                        ui.add(crate::brand::field(value).desired_width(80.0));
+                                        ui.label(if *amount { draft.currency.as_str() } else { "%" });
+                                    });
+                                    ui.weak(t("Une ligne par taux de TVA du devis, au prorata du total.", "One line per quote tax rate, pro rata of the total."));
+                                    ui.horizontal(|ui| {
+                                        if ui.button(t("Créer l’acompte", "Create deposit")).clicked() {
+                                            let share = if *amount { facturecraft_core::billing::Share::Amount(value.clone()) } else { facturecraft_core::billing::Share::Percent(value.clone()) };
+                                            match self.store.derive_deposit(id, state.version, &share, &draft.title) {
+                                                Ok(_) => { self.page = Page::Invoices; self.review = None; done = true; }
+                                                Err(error) => self.error = Some(error.to_string()),
+                                            }
+                                        }
+                                        if ui.button(t("Annuler", "Cancel")).clicked() { done = true; }
+                                    });
+                                }
+                                _ => {
+                                    ui.horizontal(|ui| {
+                                        if ui.button(t("Créer une facture", "Create invoice")).clicked() {
+                                            self.derive_dialog = Some((id, DeriveDialog::Invoice(vec![true; quote.lines.len()])));
+                                        }
+                                        if ui.button(t("Créer un acompte", "Create deposit")).clicked() {
+                                            self.derive_dialog = Some((id, DeriveDialog::Deposit { amount: false, value: "30".into() }));
+                                        }
+                                    });
+                                }
                             }
+                            if done { self.derive_dialog = None; self.refresh(); }
                         }
                         if state.kind == "invoice" && ui.button(t("Créer un avoir", "Create credit note")).clicked() { match self.store.derive_document(id, "credit", &draft.title) { Ok(_) => { self.review = None; self.refresh(); }, Err(error) => self.error = Some(error.to_string()) } }
                         if matches!(state.kind.as_str(), "invoice" | "deposit") {

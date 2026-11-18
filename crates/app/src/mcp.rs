@@ -93,7 +93,7 @@ fn tools() -> Value {
         &["description", "quantity", "price", "discount", "vat"],
     );
     let quote = object(
-        json!({"recipient":string,"recipient_email":string,"recipient_address":string,"recipient_country":string,"recipient_registration":string,"payment_terms":string,"payment_method":string,"cgv":string,"valid_until":string,"terms":string,"global_discount":string,"lines":{"type":"array","items":line}}),
+        json!({"recipient":string,"recipient_email":string,"recipient_address":string,"recipient_country":string,"recipient_registration":string,"payment_terms":string,"payment_method":string,"cgv":string,"valid_until":string,"terms":string,"global_discount":string,"tags":{"type":"array","items":string},"notes":string,"lines":{"type":"array","items":line}}),
         &["recipient", "lines"],
     );
     let draft_id = object(json!({"id":id}), &["id"]);
@@ -240,9 +240,16 @@ fn quote_arguments<T: DeserializeOwned>(value: &Value) -> Result<T, RpcError> {
             "recipient",
             "recipient_email",
             "recipient_address",
+            "recipient_country",
+            "recipient_registration",
+            "payment_terms",
+            "payment_method",
+            "cgv",
             "valid_until",
             "terms",
             "global_discount",
+            "tags",
+            "notes",
             "lines",
         ],
     ) || !quote["lines"].as_array().is_some_and(|lines| {

@@ -6,13 +6,6 @@ pub(crate) fn lookup(connection: &Connection, key: &str, request: &str) -> Resul
         !key.trim().is_empty() && key.len() <= 200,
         "Idempotency key must contain 1–200 bytes"
     );
-    connection.execute_batch(
-        "CREATE TABLE IF NOT EXISTS draft_requests (
-            request_key TEXT PRIMARY KEY,
-            request TEXT NOT NULL,
-            draft_id INTEGER NOT NULL REFERENCES drafts(id)
-        );",
-    )?;
     let existing: Option<(String, i64)> = connection
         .query_row(
             "SELECT request, draft_id FROM draft_requests WHERE request_key=?1",

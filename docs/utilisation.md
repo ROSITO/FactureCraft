@@ -77,9 +77,48 @@ Depuis « Voir et agir » :
 
 Les listes se filtrent par état et se recherchent par titre, client ou numéro. Dans Clients, les contacts du carnet se modifient et se suppriment. Les contacts importés de Facture.net restent en lecture seule et peuvent être copiés dans le carnet.
 
+## Étiquettes et notes internes
+
+Dans l’éditeur, le champ « Étiquettes » accepte une liste séparée par des virgules et « Notes internes » un texte libre. Les deux restent privés : ils ne sont jamais imprimés sur le PDF. Les étiquettes apparaissent en pastilles dans les listes, et la recherche de documents les parcourt, notes comprises. Les outils MCP acceptent les champs optionnels `tags` et `notes`.
+
+## Facturer un devis accepté : lignes et acompte
+
+Dans « Voir et agir » d’un devis accepté, « Créer une facture » ouvre la liste des lignes avec une case à cocher chacune (toutes cochées par défaut) : le brouillon ne reprend que les lignes cochées. « Créer un acompte » demande un pourcentage (30 % par défaut) ou un montant TTC. L’acompte reprend la part demandée de chaque taux de TVA du devis, remise globale comprise, avec « Acompte de N % sur devis NUMÉRO » pour libellé. Un devis à un seul taux, ou sans TVA, donne donc une seule ligne ; sans TVA, la mention d’exonération du devis est conservée. Avec plusieurs taux, on obtient une ligne par taux, ce qui garde la TVA exacte. Un montant se convertit en pourcentage du total TTC, d’où un écart possible d’un centime par taux.
+
+## Historique d’un client
+
+Dans Clients, « Historique » (ou un clic sur le nom) ouvre une fiche listant les documents dont le destinataire porte le même nom, sans tenir compte des majuscules ni des espaces autour : type, numéro et statut, date d’émission, montant TTC et reste à payer pour les factures, avec « Voir et agir ». Les devis et factures archivés de Facture.net au même nom s’ajoutent en lecture seule, avec leur numéro et leur montant HT.
+
+## Ouvrir les PDF archivés
+
+Dans Archives, les éléments qui ont un PDF d’origine proposent « Ouvrir le PDF » (visionneuse du système) et « Enregistrer le PDF… ». Un devis ou une facture archivé affiche ces boutons dès que son PDF a été rattaché.
+
+## Convertir un brouillon dans une autre devise
+
+Dans l’éditeur, « Convertir dans une autre devise… » demande la devise cible, le taux (1 devise actuelle = N devise cible), sa date et sa source (par exemple « BCE »). Les prix unitaires sont convertis et arrondis à 6 décimales, puis les totaux suivent la précision de la nouvelle devise. Le PDF imprime sous les totaux « Montants convertis de EUR au taux 1 EUR = 0,9312 CHF (BCE, 18/11/2026) ». Une seule conversion par document ; pour la défaire, abandonner les modifications avant d’enregistrer.
+
 ## Langue et devise
 
 Dans Paramètres, la section « Langue et devise » règle la langue de l’interface (français ou anglais), ainsi que la langue et la devise des nouveaux documents. Chaque document garde ensuite sa propre langue et sa devise, modifiables dans l’éditeur. Le PDF suit la langue du document : libellés, dates, format des montants et mention de pénalités par défaut. Les totaux du tableau de bord restent séparés par devise, avec un sélecteur en haut de page. Le tableau de bord s’ouvre sur la devise par défaut si elle a des documents, sinon sur celle qui en compte le plus. L’option `facturecraft gui --language en` force la langue de l’interface pour une session.
+
+## Factur-X
+
+À partir du 1er septembre 2027, les factures entre entreprises passent par une plateforme agréée, dans un format structuré. FactureCraft produit un fichier Factur-X pour chaque facture, facture d’acompte ou avoir finalisé : le PDF figé, converti en PDF/A-3, qui contient en pièce jointe le fichier `factur-x.xml` (format CII, profil EN 16931). Le XML reprend le numéro, la date d’émission, l’émetteur tel qu’il était à la finalisation (nom, SIREN, TVA, adresse, e-mail), le client, les lignes (quantité, unité, prix, remises), le détail de la TVA ou le motif d’exonération, l’échéance, les acomptes déduits et la facture d’origine d’un avoir.
+
+Dans « Voir et agir », « Exporter en Factur-X » propose d’enregistrer `NUMERO-facturx.pdf`. En ligne de commande :
+
+```console
+facturecraft draft facturx ID facture-facturx.pdf
+```
+
+Le PDF figé enregistré dans la base n’est pas modifié : le fichier Factur-X est recréé à chaque export, à l’identique. Les devis et les brouillons sont refusés.
+
+À vérifier sur la plateforme agréée lors du premier dépôt :
+
+- le fichier est accepté sans erreur de conformité (PDF/A-3 et règles EN 16931) ; aucun validateur n’est intégré à FactureCraft ;
+- l’adresse est bien découpée : la dernière ligne de l’adresse doit être « code postal ville », par exemple `75001 PARIS`, et le pays doit être indiqué en toutes lettres (France par défaut) ;
+- en franchise de TVA, le motif « TVA non applicable, art. 293 B du CGI » apparaît avec la catégorie E et le code `VATEX-FR-FRANCHISE`. Certaines règles demandent aussi un numéro de TVA de l’émetteur pour la catégorie E : vérifier ce que la plateforme exige ;
+- le SIREN du client est renseigné pour les clients professionnels, ainsi que les adresses électroniques attendues par la plateforme.
 
 ## Utiliser MCP dans Codex ou Hermes
 
@@ -107,3 +146,20 @@ facturecraft --db restauree.sqlite3 restore copie.sqlite3
 La prévisualisation d’import n’ouvre pas la base. Pour rejouer un lot, reprendre le même libellé de source. Le rapport indique les enregistrements déjà présents, les conflits et les PDF à rapprocher. `archive link-pdf SOURCE CLE_PDF quotations ID` permet de rattacher un PDF à un devis. Utiliser `invoices` pour les factures et acomptes. Les enregistrements archivés et les PDF restent dans la base, y compris dans le fichier de sauvegarde SQLite.
 
 La restauration vérifie l’intégrité SQLite et crée une nouvelle base. Une base déjà présente à la destination est conservée. Ouvrir la copie restaurée avec `facturecraft --db restauree.sqlite3 gui`.
+
+## Sauvegarde, restauration et exports
+
+Dans **Paramètres**, la section « Sauvegarde et restauration » affiche le chemin de la base en cours.
+
+- **Créer une sauvegarde…** écrit une copie cohérente de la base (nom proposé : `facturecraft-AAAA-MM-JJ.sqlite3`). Un fichier existant n’est jamais écrasé.
+- **Restaurer une sauvegarde…** vérifie la sauvegarde choisie (intégrité SQLite, tables attendues, version compatible) puis la copie dans un nouveau fichier `facturecraft-restaure-AAAA-MM-JJ.sqlite3`, à côté de la base actuelle. La base en cours n’est pas modifiée. Pour utiliser la copie, quittez FactureCraft puis lancez `facturecraft --db CHEMIN gui`.
+- **Exporter les documents (CSV)** et **(JSON)** produisent une ligne par document : identifiant, type, numéro, statut, titre, destinataire, devise, langue, date d’émission, échéance, HT, TVA, TTC, encaissé et reste dû. Le CSV est en UTF-8 avec BOM, séparateur virgule : Excel et LibreOffice lisent correctement les accents.
+
+En ligne de commande :
+
+```console
+facturecraft export documents documents.csv
+facturecraft export documents documents.json --format json
+```
+
+Une base créée par une version plus récente de FactureCraft est refusée avec un message explicite plutôt que modifiée.

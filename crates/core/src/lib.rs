@@ -30,18 +30,7 @@ impl Store {
         }
         let conn = Connection::open(path)?;
         conn.busy_timeout(Duration::from_secs(5))?;
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS drafts (
-            id INTEGER PRIMARY KEY,
-            title TEXT NOT NULL,
-            currency TEXT NOT NULL,
-            language TEXT NOT NULL
-        ); CREATE TABLE IF NOT EXISTS quote_details (draft_id INTEGER PRIMARY KEY, details TEXT NOT NULL); CREATE TABLE IF NOT EXISTS contacts (name TEXT NOT NULL, email TEXT NOT NULL, address TEXT NOT NULL, UNIQUE(name,email,address));",
-        )?;
-        billing::initialize(&conn)?;
-        products::initialize(&conn)?;
-        issuer::initialize(&conn)?;
-        contacts::initialize(&conn)?;
+        schema::migrate(&conn)?;
         Ok(Self(conn))
     }
 
@@ -124,6 +113,10 @@ fn read_draft(row: &rusqlite::Row<'_>) -> rusqlite::Result<Draft> {
     })
 }
 
+pub mod schema;
+
+pub mod export;
+
 pub mod import;
 
 pub mod quote;
@@ -142,3 +135,5 @@ pub mod products;
 pub mod documents;
 
 pub mod dashboard;
+
+pub mod facturx;

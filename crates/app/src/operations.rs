@@ -68,3 +68,24 @@ pub fn publish_file(
 pub fn write_file(path: &Path, contents: &[u8]) -> Result<()> {
     publish_file(path, |file| Ok(file.write_all(contents)?))
 }
+
+/// Writes `bytes` to a fresh temporary file and opens it with the system viewer.
+pub fn open_pdf(bytes: &[u8]) -> Result<()> {
+    let mut file = tempfile::Builder::new()
+        .prefix("facturecraft-")
+        .suffix(".pdf")
+        .tempfile()?;
+    file.write_all(bytes)?;
+    let (_, path) = file.keep()?;
+    let mut command = if cfg!(target_os = "macos") {
+        std::process::Command::new("open")
+    } else if cfg!(target_os = "windows") {
+        let mut command = std::process::Command::new("cmd");
+        command.args(["/C", "start", ""]);
+        command
+    } else {
+        std::process::Command::new("xdg-open")
+    };
+    command.arg(&path).spawn()?;
+    Ok(())
+}

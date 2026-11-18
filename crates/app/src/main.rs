@@ -11,13 +11,17 @@ use clap::{Parser, Subcommand, ValueEnum};
 use facturecraft_core::{Store, default_db};
 use std::path::PathBuf;
 
-#[derive(Clone, Copy, PartialEq, ValueEnum)]
+#[derive(Clone, Copy, Debug, PartialEq, ValueEnum)]
 enum Language {
     Fr,
     En,
 }
 
 impl Language {
+    fn from_code(code: &str) -> Self {
+        if code == "en" { Self::En } else { Self::Fr }
+    }
+
     fn code(self) -> &'static str {
         match self {
             Self::Fr => "fr",
@@ -38,8 +42,9 @@ struct Args {
 #[derive(Subcommand)]
 enum Command {
     Gui {
-        #[arg(long, value_enum, default_value = "fr")]
-        language: Language,
+        /// Interface language; defaults to the one chosen in Settings.
+        #[arg(long, value_enum)]
+        language: Option<Language>,
     },
     Draft {
         #[command(subcommand)]
@@ -182,9 +187,7 @@ fn main() -> Result<()> {
         });
     }
     let store = Store::open(&path).context("Opening FactureCraft storage")?;
-    match args.command.unwrap_or(Command::Gui {
-        language: Language::Fr,
-    }) {
+    match args.command.unwrap_or(Command::Gui { language: None }) {
         Command::Gui { language } => ui::run(store, language),
         Command::Import { .. } => unreachable!("Handled before opening the database"),
         Command::Mcp => mcp::serve(&store),

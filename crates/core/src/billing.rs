@@ -773,6 +773,12 @@ mod tests {
         assert_eq!(board.revenue_year, "200.00");
         assert_eq!(board.outstanding, "200.00");
         assert_eq!(board.activity[0].number, expected);
+        assert_eq!(
+            store.dashboard_currency("chf")?,
+            "EUR",
+            "opens where the data is"
+        );
+        assert_eq!(store.dashboard_currency("eur")?, "EUR");
         Ok(())
     }
 

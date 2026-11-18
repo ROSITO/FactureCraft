@@ -587,7 +587,7 @@ pub fn render(document: &Document<'_>) -> Result<Vec<u8>> {
     if invoice {
         // Mandatory on B2B invoices: late-payment penalties and recovery indemnity.
         layout.y += 3.0;
-        for line in layout.wrap(issuer.late_penalties(), 7.5, RIGHT - LEFT) {
+        for line in layout.wrap(issuer.late_penalties(document.language), 7.5, RIGHT - LEFT) {
             layout.ensure(3.6);
             layout.text(LEFT, 7.5, &line, LABEL, false, Align::Left);
             layout.y += 3.6;

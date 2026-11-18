@@ -6,7 +6,65 @@ use facturecraft_core::{Draft, Store};
 use crate::brand::{AMBER, CREAM, INK, Tone, accent};
 use facturecraft_core::{billing::BillingState, products::Product};
 
-pub fn run(store: Store, language: Language) -> Result<()> {
+/// Currencies offered in the editor and settings; any other ISO 4217 code stays accepted.
+const CURRENCIES: [(&str, &str, &str); 12] = [
+    ("EUR", "Euro", "Euro"),
+    ("USD", "Dollar américain", "US dollar"),
+    ("GBP", "Livre sterling", "Pound sterling"),
+    ("CHF", "Franc suisse", "Swiss franc"),
+    ("CAD", "Dollar canadien", "Canadian dollar"),
+    ("AUD", "Dollar australien", "Australian dollar"),
+    ("JPY", "Yen", "Yen"),
+    ("SEK", "Couronne suédoise", "Swedish krona"),
+    ("NOK", "Couronne norvégienne", "Norwegian krone"),
+    ("DKK", "Couronne danoise", "Danish krone"),
+    ("PLN", "Złoty", "Złoty"),
+    ("MAD", "Dirham marocain", "Moroccan dirham"),
+];
+
+fn currency_picker(ui: &mut egui::Ui, id: &str, value: &mut String, fr: bool) -> bool {
+    let mut changed = false;
+    egui::ComboBox::from_id_salt(id)
+        .selected_text(value.as_str())
+        .show_ui(ui, |ui| {
+            for (code, name_fr, name_en) in CURRENCIES {
+                let label = format!("{code} · {}", if fr { name_fr } else { name_en });
+                if ui.selectable_label(value == code, label).clicked() {
+                    *value = code.into();
+                    changed = true;
+                }
+            }
+        });
+    changed
+}
+
+fn language_picker(ui: &mut egui::Ui, id: &str, value: &mut Language) -> bool {
+    let before = *value;
+    egui::ComboBox::from_id_salt(id)
+        .selected_text(match value {
+            Language::Fr => "Français",
+            Language::En => "English",
+        })
+        .show_ui(ui, |ui| {
+            ui.selectable_value(value, Language::Fr, "Français");
+            ui.selectable_value(value, Language::En, "English");
+        });
+    before != *value
+}
+
+pub fn run(store: Store, language: Option<Language>) -> Result<()> {
+    let preference = |key: &str| store.preference(key).ok().flatten();
+    let language = language
+        .or_else(|| preference("ui.language").map(|code| Language::from_code(&code)))
+        .unwrap_or(Language::Fr);
+    let default_document_language = preference("ui.document_language")
+        .map(|code| Language::from_code(&code))
+        .unwrap_or(language);
+    let default_currency = preference("ui.currency").unwrap_or_else(|| "EUR".into());
+    // Open the dashboard where the history is, e.g. EUR archives with CHF as default.
+    let store_currency = store
+        .dashboard_currency(&default_currency)
+        .unwrap_or_else(|_| default_currency.clone());
     if let Some(theme) = store.preference("ui.theme")? {
         crate::brand::set_theme(&theme);
     }
@@ -61,7 +119,7 @@ pub fn run(store: Store, language: Language) -> Result<()> {
                 quote: Default::default(),
                 editing: None,
                 contacts: Vec::new(),
-                currency: "EUR".into(),
+                currency: default_currency.clone(),
                 document_language: language,
                 composing: false,
                 page: Page::Dashboard,
@@ -83,7 +141,9 @@ pub fn run(store: Store, language: Language) -> Result<()> {
                 issuer: Default::default(),
                 board: None,
                 board_year: 0,
-                board_currency: "EUR".into(),
+                board_currency: store_currency.clone(),
+                default_currency,
+                default_document_language,
                 products: Vec::new(),
                 product_edit: None,
                 confirm_delete_product: None,
@@ -143,6 +203,9 @@ struct Drafts {
     contacts: Vec<facturecraft_core::contacts::Contact>,
     currency: String,
     document_language: Language,
+    /// Defaults for new documents, chosen in Settings.
+    default_currency: String,
+    default_document_language: Language,
     composing: bool,
     page: Page,
     contact_query: String,
@@ -523,6 +586,7 @@ impl eframe::App for Drafts {
                     );
                     egui::ScrollArea::vertical().id_salt("settings").show(ui, |ui| {
                         self.appearance_settings(ui, fr);
+                        self.language_settings(ui, fr);
                         if let Some(notice) = &self.notice { ui.label(notice); }
                         if let Some(error) = &self.error { ui.colored_label(ui.visuals().error_fg_color, error); }
                         self.issuer_settings(ui, fr);
@@ -716,8 +780,8 @@ impl eframe::App for Drafts {
                             if self.page == Page::Invoices {
                                 match self.store.create_invoice(
                                     t("Nouvelle facture", "New invoice"),
-                                    "EUR",
-                                    self.language.code(),
+                                    &self.default_currency,
+                                    self.default_document_language.code(),
                                 ) {
                                     Ok(draft) => {
                                         self.editing = Some(draft.id);
@@ -739,8 +803,8 @@ impl eframe::App for Drafts {
                             if self.page == Page::Invoices {
                                 self.quote.due_date = self.store.date_in_days(30).unwrap_or_default();
                             }
-                            self.currency = "EUR".into();
-                            self.document_language = self.language;
+                            self.currency = self.default_currency.clone();
+                            self.document_language = self.default_document_language;
                             self.error = None;
                             self.composing = true;
                         }
@@ -758,11 +822,7 @@ impl eframe::App for Drafts {
                                     );
                                     ui.horizontal_wrapped(|ui| {
                                         ui.label(t("Devise", "Currency"));
-                                        ui.add(
-                                            crate::brand::field(&mut self.currency)
-                                                .desired_width(56.0)
-                                                .char_limit(3),
-                                        );
+                                        currency_picker(ui, "document_currency", &mut self.currency, fr);
                                         egui::ComboBox::from_label(t(
                                             "Langue du document",
                                             "Document language",
@@ -1066,6 +1126,8 @@ impl eframe::App for Drafts {
                                 self.editing = None;
                                 self.title.clear();
                                 self.quote = self.new_quote();
+                                self.currency = self.default_currency.clone();
+                                self.document_language = self.default_document_language;
                                 self.error = None;
                                 self.composing = true;
                             }
@@ -1542,7 +1604,11 @@ impl Drafts {
                                     ui.label(
                                         egui::RichText::new(format!(
                                             "{}{unit}",
-                                            crate::brand::money(&product.price, "EUR", fr)
+                                            crate::brand::money(
+                                                &product.price,
+                                                &self.default_currency,
+                                                fr
+                                            )
                                         ))
                                         .size(16.0)
                                         .strong()
@@ -1562,6 +1628,60 @@ impl Drafts {
             }
             self.refresh();
         }
+    }
+
+    fn language_settings(&mut self, ui: &mut egui::Ui, fr: bool) {
+        let t = |f, e| if fr { f } else { e };
+        crate::brand::section(ui, t("Langue et devise", "Language and currency"));
+        crate::brand::card(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            let mut saved = Ok(());
+            egui::Grid::new("language_currency")
+                .num_columns(2)
+                .spacing([16.0, 10.0])
+                .show(ui, |ui| {
+                    ui.label(t("Langue de l’interface", "Interface language"));
+                    if language_picker(ui, "interface_language", &mut self.language) {
+                        saved = self
+                            .store
+                            .set_preference("ui.language", self.language.code());
+                    }
+                    ui.end_row();
+                    ui.label(t(
+                        "Langue des nouveaux documents",
+                        "Language of new documents",
+                    ));
+                    if language_picker(
+                        ui,
+                        "document_language_default",
+                        &mut self.default_document_language,
+                    ) {
+                        saved = self.store.set_preference(
+                            "ui.document_language",
+                            self.default_document_language.code(),
+                        );
+                    }
+                    ui.end_row();
+                    ui.label(t(
+                        "Devise des nouveaux documents",
+                        "Currency of new documents",
+                    ));
+                    if currency_picker(ui, "currency_default", &mut self.default_currency, fr) {
+                        saved = self
+                            .store
+                            .set_preference("ui.currency", &self.default_currency);
+                    }
+                    ui.end_row();
+                });
+            ui.weak(t(
+                "Chaque document garde sa propre langue et sa devise, modifiables dans l’éditeur. Les totaux du tableau de bord restent séparés par devise.",
+                "Each document keeps its own language and currency, editable in the editor. Dashboard totals stay separate per currency.",
+            ));
+            if let Err(error) = saved {
+                self.error = Some(error.to_string());
+            }
+        });
+        ui.add_space(12.0);
     }
 
     fn apply_theme(&mut self, ctx: &egui::Context, id: &str) {

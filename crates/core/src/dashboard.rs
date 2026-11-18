@@ -134,6 +134,24 @@ impl Store {
         })
     }
 
+    /// Currency to open the dashboard on: the preferred one when it has activity,
+    /// otherwise the currency with the most documents.
+    pub fn dashboard_currency(&self, preferred: &str) -> Result<String> {
+        let preferred = preferred.trim().to_ascii_uppercase();
+        let mut counts = std::collections::BTreeMap::<String, usize>::new();
+        for event in self.events()? {
+            *counts.entry(event.currency).or_default() += 1;
+        }
+        if counts.contains_key(&preferred) || counts.is_empty() {
+            return Ok(preferred);
+        }
+        Ok(counts
+            .into_iter()
+            .max_by_key(|(_, count)| *count)
+            .map(|(currency, _)| currency)
+            .unwrap_or(preferred))
+    }
+
     /// Finalized local documents and imported Facture.net quotes and invoices.
     fn events(&self) -> Result<Vec<Event>> {
         let mut events = Vec::new();

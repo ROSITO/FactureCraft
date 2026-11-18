@@ -28,12 +28,19 @@ pub struct Issuer {
 }
 
 /// Mentions required on French B2B invoices (Code de commerce, art. L441-10 and D441-5).
+pub const DEFAULT_LATE_PENALTIES_EN: &str = "Late payment: penalties at the European Central Bank refinancing rate plus 10 points and a fixed recovery indemnity of EUR 40 (French Commercial Code, art. L441-10 and D441-5). No discount for early payment.";
+
 pub const DEFAULT_LATE_PENALTIES: &str = "En cas de retard de paiement, pénalités au taux de refinancement de la BCE majoré de 10 points et indemnité forfaitaire pour frais de recouvrement de 40 € (art. L441-10 et D441-5 du Code de commerce). Pas d’escompte pour paiement anticipé.";
 
 impl Issuer {
-    pub fn late_penalties(&self) -> &str {
+    /// The issuer's clause, or the default in the document language.
+    pub fn late_penalties(&self, language: &str) -> &str {
         if self.late_penalties.trim().is_empty() {
-            DEFAULT_LATE_PENALTIES
+            if language == "en" {
+                DEFAULT_LATE_PENALTIES_EN
+            } else {
+                DEFAULT_LATE_PENALTIES
+            }
         } else {
             self.late_penalties.trim()
         }

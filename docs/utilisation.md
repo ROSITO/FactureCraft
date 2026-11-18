@@ -77,6 +77,10 @@ Depuis « Voir et agir » :
 
 Les listes se filtrent par état et se recherchent par titre, client ou numéro. Dans Clients, les contacts du carnet se modifient et se suppriment. Les contacts importés de Facture.net restent en lecture seule et peuvent être copiés dans le carnet.
 
+## Langue et devise
+
+Dans Paramètres, la section « Langue et devise » règle la langue de l’interface (français ou anglais), ainsi que la langue et la devise des nouveaux documents. Chaque document garde ensuite sa propre langue et sa devise, modifiables dans l’éditeur. Le PDF suit la langue du document : libellés, dates, format des montants et mention de pénalités par défaut. Les totaux du tableau de bord restent séparés par devise, avec un sélecteur en haut de page. Le tableau de bord s’ouvre sur la devise par défaut si elle a des documents, sinon sur celle qui en compte le plus. L’option `facturecraft gui --language en` force la langue de l’interface pour une session.
+
 ## Utiliser MCP dans Codex ou Hermes
 
 Déclarer un serveur local stdio avec le chemin absolu du binaire installé comme commande et `mcp` comme argument. Pour choisir une base dédiée, ajouter `--db`, suivi de son chemin absolu, avant `mcp`. La liste des outils publiée par le serveur fournit les schémas d’entrée.

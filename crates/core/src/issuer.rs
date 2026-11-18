@@ -21,6 +21,23 @@ pub struct Issuer {
     pub quote_validity: String,
     /// General terms of sale, printed on their own page of quotes.
     pub cgv: String,
+    /// Also print the general terms of sale on invoices.
+    pub cgv_on_invoices: bool,
+    /// Late-payment clause printed on invoices; empty uses [`DEFAULT_LATE_PENALTIES`].
+    pub late_penalties: String,
+}
+
+/// Mentions required on French B2B invoices (Code de commerce, art. L441-10 and D441-5).
+pub const DEFAULT_LATE_PENALTIES: &str = "En cas de retard de paiement, pénalités au taux de refinancement de la BCE majoré de 10 points et indemnité forfaitaire pour frais de recouvrement de 40 € (art. L441-10 et D441-5 du Code de commerce). Pas d’escompte pour paiement anticipé.";
+
+impl Issuer {
+    pub fn late_penalties(&self) -> &str {
+        if self.late_penalties.trim().is_empty() {
+            DEFAULT_LATE_PENALTIES
+        } else {
+            self.late_penalties.trim()
+        }
+    }
 }
 
 pub(crate) fn initialize(db: &rusqlite::Connection) -> Result<()> {
@@ -90,6 +107,15 @@ impl Store {
         Ok(self
             .0
             .query_row("SELECT date('now','localtime')", [], |r| r.get(0))?)
+    }
+
+    /// Local date `days` from today, `YYYY-MM-DD`.
+    pub fn date_in_days(&self, days: i64) -> Result<String> {
+        Ok(self.0.query_row(
+            "SELECT date('now','localtime',?1)",
+            [format!("{days:+} days")],
+            |r| r.get(0),
+        )?)
     }
 
     pub fn document_issuer(&self, id: i64) -> Result<Issuer> {

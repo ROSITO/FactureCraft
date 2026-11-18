@@ -139,4 +139,6 @@ pub mod issuer;
 
 pub mod products;
 
+pub mod documents;
+
 pub mod dashboard;

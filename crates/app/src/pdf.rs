@@ -319,20 +319,38 @@ pub fn render(document: &Document<'_>) -> Result<Vec<u8>> {
         false,
         Align::Left,
     );
+    // Small lines under the date: invoice dates, then the demonstration notice.
+    let invoice = matches!(document.kind, "invoice" | "deposit");
+    let mut notes: Vec<String> = Vec::new();
+    if invoice && !quote.service_date.trim().is_empty() {
+        notes.push(format!(
+            "{} {}",
+            t("Date de prestation :", "Service date:"),
+            short_date(quote.service_date.trim(), fr)
+        ));
+    }
+    if invoice && !quote.due_date.trim().is_empty() {
+        notes.push(format!(
+            "{} {}",
+            t("Échéance :", "Due date:"),
+            short_date(quote.due_date.trim(), fr)
+        ));
+    }
     if reference.starts_with("TEST-") {
-        layout.y = 34.0;
-        layout.text(
-            LEFT,
-            8.0,
+        notes.push(
             t(
                 "Document de démonstration, sans valeur légale",
                 "Demonstration document, not legally valid",
-            ),
-            LABEL,
-            false,
-            Align::Left,
+            )
+            .into(),
         );
     }
+    layout.y = 34.0;
+    for note in &notes {
+        layout.text(LEFT, 8.5, note, LABEL, false, Align::Left);
+        layout.y += 4.4;
+    }
+    let header_bottom = layout.y;
     if let Some((w, h)) = document.logo.and_then(logo_size) {
         layout.page().push(Op::Image {
             x: RIGHT - w,
@@ -373,7 +391,7 @@ pub fn render(document: &Document<'_>) -> Result<Vec<u8>> {
             false,
         ),
     ];
-    let top = 42.0;
+    let top = (header_bottom + 6.0).max(42.0);
     let mut bottom: f64 = top;
     for (x, title, rows) in [
         (LEFT, t("Émetteur", "Issuer"), &sender[..]),
@@ -566,6 +584,15 @@ pub fn render(document: &Document<'_>) -> Result<Vec<u8>> {
         layout.text(RIGHT - 1.0, 8.5, amount, INK, *bold, Align::Right);
         layout.y += 5.5;
     }
+    if invoice {
+        // Mandatory on B2B invoices: late-payment penalties and recovery indemnity.
+        layout.y += 3.0;
+        for line in layout.wrap(issuer.late_penalties(), 7.5, RIGHT - LEFT) {
+            layout.ensure(3.6);
+            layout.text(LEFT, 7.5, &line, LABEL, false, Align::Left);
+            layout.y += 3.6;
+        }
+    }
 
     // Conditions
     let mut conditions = vec![
@@ -609,7 +636,8 @@ pub fn render(document: &Document<'_>) -> Result<Vec<u8>> {
     } else {
         quote.cgv.trim()
     };
-    if document.kind == "quote" && !cgv.is_empty() {
+    let terms_of_sale = document.kind == "quote" || (invoice && issuer.cgv_on_invoices);
+    if terms_of_sale && !cgv.is_empty() {
         layout.new_page();
         layout.heading(t("Conditions générales de vente", "General terms of sale"));
         layout.flow(cgv, 7.8, 3.9, 2.4);
@@ -838,6 +866,16 @@ fn quantity(value: &str, fr: bool) -> String {
         value.replace('.', ",")
     } else {
         value.replace(',', ".")
+    }
+}
+
+/// `2026-12-18` → `18/12/2026` in French; other text is kept as typed.
+fn short_date(value: &str, fr: bool) -> String {
+    let parts: Vec<&str> = value.split('-').collect();
+    if fr && parts.len() == 3 && parts.iter().all(|p| p.chars().all(|c| c.is_ascii_digit())) {
+        format!("{}/{}/{}", parts[2], parts[1], parts[0])
+    } else {
+        value.to_string()
     }
 }
 

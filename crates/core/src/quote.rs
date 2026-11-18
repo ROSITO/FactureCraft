@@ -23,6 +23,12 @@ pub struct Quote {
     /// General terms of sale for this document, copied from the issuer's defaults.
     #[serde(default)]
     pub cgv: String,
+    /// Payment due date `YYYY-MM-DD`, required to finalize an invoice.
+    #[serde(default)]
+    pub due_date: String,
+    /// Date or period of the service, when it differs from the issue date.
+    #[serde(default)]
+    pub service_date: String,
     #[serde(default)]
     pub valid_until: String,
     #[serde(default)]

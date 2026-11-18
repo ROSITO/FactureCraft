@@ -63,6 +63,20 @@ Mise en forme, valable dans les descriptions, les conditions et les CGV :
 - `# Intertitre` en début de ligne crée un intertitre en gras ;
 - une ligne vide sépare deux paragraphes.
 
+## Factures : mentions obligatoires
+
+Une facture ou un acompte ne se finalise qu’avec une date d’échéance (AAAA-MM-JJ). Une facture créée depuis un devis reçoit par défaut une échéance à 30 jours, modifiable. La date de prestation est facultative. Les deux s’impriment sous la date du document. La mention des pénalités de retard et de l’indemnité forfaitaire de 40 € s’imprime automatiquement sous les totaux. Son texte se personnalise dans Paramètres. Les CGV peuvent aussi s’imprimer sur les factures (option dans Paramètres).
+
+## Gérer les documents et les clients
+
+Depuis « Voir et agir » :
+- dupliquer un devis ou une facture ;
+- supprimer un brouillon (un document finalisé est conservé) ;
+- marquer un devis finalisé comme accepté, refusé ou annulé ;
+- enregistrer un règlement avec sa référence, puis annuler un règlement saisi par erreur.
+
+Les listes se filtrent par état et se recherchent par titre, client ou numéro. Dans Clients, les contacts du carnet se modifient et se suppriment. Les contacts importés de Facture.net restent en lecture seule et peuvent être copiés dans le carnet.
+
 ## Utiliser MCP dans Codex ou Hermes
 
 Déclarer un serveur local stdio avec le chemin absolu du binaire installé comme commande et `mcp` comme argument. Pour choisir une base dédiée, ajouter `--db`, suivi de son chemin absolu, avant `mcp`. La liste des outils publiée par le serveur fournit les schémas d’entrée.

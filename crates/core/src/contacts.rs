@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Default, Deserialize, Serialize)]
 pub struct Contact {
+    /// Local address book row; `None` for contacts read from the imported archive.
+    #[serde(default)]
+    pub id: Option<i64>,
     pub name: String,
     pub email: String,
     /// One line per address line.
@@ -37,14 +40,15 @@ impl Store {
         let mut records = Vec::new();
         let mut query = self
             .0
-            .prepare("SELECT name,email,address,country,registration FROM contacts ORDER BY name COLLATE NOCASE")?;
+            .prepare("SELECT rowid,name,email,address,country,registration FROM contacts ORDER BY name COLLATE NOCASE")?;
         for row in query.query_map([], |row| {
             Ok(Contact {
-                name: row.get(0)?,
-                email: row.get(1)?,
-                address: row.get(2)?,
-                country: row.get(3)?,
-                registration: row.get(4)?,
+                id: Some(row.get(0)?),
+                name: row.get(1)?,
+                email: row.get(2)?,
+                address: row.get(3)?,
+                country: row.get(4)?,
+                registration: row.get(5)?,
             })
         })? {
             records.push(row?);
@@ -76,6 +80,7 @@ impl Store {
                 }
                 address.push(city.trim());
                 records.push(Contact {
+                    id: None,
                     name,
                     email: field("email").into(),
                     address: address
@@ -90,6 +95,8 @@ impl Store {
             }
         }
         records.sort_by_key(|record| record.name.to_lowercase());
+        // A local entry wins over the archived one it duplicates.
+        records.sort_by_key(|record| (record.name.to_lowercase(), record.id.is_none()));
         records.dedup_by(|a, b| a.name == b.name && a.email == b.email && a.address == b.address);
         Ok(records)
     }
@@ -100,11 +107,40 @@ impl Store {
             !name.is_empty() && name.chars().count() <= 200,
             "Contact name must contain 1–200 characters"
         );
-        self.0.execute(
-            "INSERT INTO contacts(name,email,address,country,registration) VALUES (?1,?2,?3,?4,?5)
-            ON CONFLICT(name,email,address) DO UPDATE SET country=excluded.country, registration=excluded.registration",
-            params![name, contact.email.trim(), contact.address.trim(), contact.country.trim(), contact.registration.trim()],
-        )?;
+        let values = params![
+            name,
+            contact.email.trim(),
+            contact.address.trim(),
+            contact.country.trim(),
+            contact.registration.trim(),
+            contact.id
+        ];
+        if contact.id.is_some() {
+            ensure!(
+                self.0.execute(
+                    "UPDATE contacts SET name=?1,email=?2,address=?3,country=?4,registration=?5 WHERE rowid=?6",
+                    values,
+                )? == 1,
+                "Contact not found"
+            );
+        } else {
+            self.0.execute(
+                "INSERT INTO contacts(name,email,address,country,registration) VALUES (?1,?2,?3,?4,?5)
+                ON CONFLICT(name,email,address) DO UPDATE SET country=excluded.country, registration=excluded.registration",
+                &values[..5],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Removes an address book entry; documents keep their own copy of the recipient.
+    pub fn delete_contact(&self, id: i64) -> Result<()> {
+        ensure!(
+            self.0
+                .execute("DELETE FROM contacts WHERE rowid=?1", [id])?
+                == 1,
+            "Contact not found"
+        );
         Ok(())
     }
 }

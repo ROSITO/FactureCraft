@@ -28,6 +28,17 @@ pub(crate) fn initialize(db: &Connection) -> Result<()> {
         CREATE TABLE IF NOT EXISTS issuer_snapshot(document_id INTEGER PRIMARY KEY REFERENCES billing(id), details TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
         COMMIT;")?;
+    // Added after the first release: a refused or cancelled quote.
+    let closed: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('billing') WHERE name='closed')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !closed {
+        db.execute_batch(
+            "ALTER TABLE billing ADD COLUMN closed TEXT; ALTER TABLE billing ADD COLUMN closed_date TEXT;",
+        )?;
+    }
     Ok(())
 }
 
@@ -42,6 +53,8 @@ pub struct BillingState {
     pub deposits: String,
     pub credited: String,
     pub outstanding: String,
+    /// `refused` or `cancelled` for a closed quote.
+    pub closed: Option<String>,
 }
 
 pub struct DocumentSnapshot {
@@ -78,9 +91,9 @@ impl Store {
 
     pub fn billing_state(&self, id: i64) -> Result<BillingState> {
         let mut state = self.0.query_row(
-            "SELECT kind,number,accepted_date IS NOT NULL,source_id,version FROM billing WHERE id=?1",
+            "SELECT kind,number,accepted_date IS NOT NULL,source_id,version,closed FROM billing WHERE id=?1",
             [id], |row| Ok(BillingState {kind: row.get(0)?, number: row.get(1)?, accepted: row.get(2)?,
-                source_id: row.get(3)?, version: row.get(4)?, paid: String::new(), deposits: String::new(), credited:String::new(),outstanding:String::new()}))?;
+                source_id: row.get(3)?, version: row.get(4)?, paid: String::new(), deposits: String::new(), credited:String::new(),outstanding:String::new(), closed: row.get(5)?}))?;
         state.paid = self
             .sum_amounts(
                 "SELECT amount FROM billing_payment WHERE document_id=?1",
@@ -163,7 +176,7 @@ impl Store {
 
     pub fn accept_quote(&self, id: i64, date: &str) -> Result<()> {
         self.validate_date(date)?;
-        let changed = self.0.execute("UPDATE billing SET accepted_date=?2,version=version+1 WHERE id=?1 AND kind='quote' AND number IS NOT NULL AND accepted_date IS NULL",params![id,date])?;
+        let changed = self.0.execute("UPDATE billing SET accepted_date=?2,version=version+1 WHERE id=?1 AND kind='quote' AND number IS NOT NULL AND accepted_date IS NULL AND closed IS NULL",params![id,date])?;
         ensure!(
             changed == 1,
             "Expected a finalized quote awaiting acceptance"
@@ -171,7 +184,7 @@ impl Store {
         Ok(())
     }
 
-    fn validate_date(&self, date: &str) -> Result<()> {
+    pub(crate) fn validate_date(&self, date: &str) -> Result<()> {
         let valid: bool = self.0.query_row(
             "SELECT length(?1)=10 AND date(?1,'+0 days') IS ?1",
             [date],
@@ -227,17 +240,17 @@ impl Store {
             state.number.is_some()
                 && ((state.kind == "quote"
                     && state.accepted
+                    && state.closed.is_none()
                     && matches!(kind, "invoice" | "deposit"))
                     || (matches!(state.kind.as_str(), "invoice" | "deposit") && kind == "credit")),
             "Invalid document transition"
         );
-        let draft = self.write_quote(
-            None,
-            title,
-            &source.currency,
-            &source.language,
-            &self.quote(id)?,
-        )?;
+        let mut content = self.quote(id)?;
+        if matches!(kind, "invoice" | "deposit") && content.due_date.trim().is_empty() {
+            // Editable default; finalization requires a due date.
+            content.due_date = self.date_in_days(30)?;
+        }
+        let draft = self.write_quote(None, title, &source.currency, &source.language, &content)?;
         tx.execute(
             "UPDATE billing SET kind=?1, source_id=?2 WHERE id=?3",
             params![kind, id, draft.id],
@@ -374,6 +387,10 @@ impl Store {
             !quote.recipient.trim().is_empty() && !quote.lines.is_empty(),
             "Recipient and at least one line are required"
         );
+        if matches!(state.kind.as_str(), "invoice" | "deposit") {
+            self.validate_date(quote.due_date.trim())
+                .context("An invoice needs a due date (YYYY-MM-DD)")?;
+        }
         ensure!(
             self.gross(id)? >= Decimal::from_str_exact(&state.deposits)?,
             "Deposits exceed invoice total"
@@ -592,6 +609,7 @@ mod tests {
     fn example(price: &str) -> Quote {
         Quote {
             recipient: "Client de test".into(),
+            due_date: "2026-12-31".into(),
             lines: vec![Line {
                 description: "Prestation".into(),
                 price: price.into(),

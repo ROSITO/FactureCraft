@@ -111,6 +111,7 @@ pub enum Tone {
     Sent,
     Pending,
     Draft,
+    Closed,
 }
 
 pub fn badge(ui: &mut egui::Ui, text: &str, tone: Tone) {
@@ -126,6 +127,10 @@ pub fn badge(ui: &mut egui::Ui, text: &str, tone: Tone) {
         Tone::Pending => (
             Color32::from_rgb(255, 241, 212),
             Color32::from_rgb(150, 92, 0),
+        ),
+        Tone::Closed => (
+            Color32::from_rgb(252, 228, 228),
+            Color32::from_rgb(168, 40, 52),
         ),
         Tone::Draft => (
             Color32::from_rgb(238, 235, 236),
@@ -198,6 +203,39 @@ pub fn section(ui: &mut egui::Ui, text: &str) {
 /// Title at the top of a card.
 pub fn card_title(ui: &mut egui::Ui, text: &str) {
     ui.label(RichText::new(text).size(16.0).strong().color(INK));
+}
+
+/// Floating rounded block filling a side panel with a 12 px gap on every side.
+/// Drawn inside the panel's own rect so its corners and shadow are never clipped.
+pub fn glass_panel<R>(
+    ui: &mut egui::Ui,
+    fill: Color32,
+    radius: u8,
+    shadow: Option<Color32>,
+    add: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    let block = ui.max_rect().shrink(12.0);
+    let painter = ui.painter();
+    if let Some(color) = shadow {
+        painter.add(
+            egui::Shadow {
+                offset: [0, 8],
+                blur: 24,
+                spread: 0,
+                color,
+            }
+            .as_shape(block, radius),
+        );
+    }
+    painter.rect(
+        block,
+        radius,
+        fill,
+        egui::Stroke::new(1.0, Color32::from_white_alpha(40)),
+        egui::StrokeKind::Inside,
+    );
+    ui.scope_builder(egui::UiBuilder::new().max_rect(block.shrink(16.0)), add)
+        .inner
 }
 
 /// One-line input, taller than egui's default.

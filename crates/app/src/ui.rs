@@ -95,6 +95,11 @@ pub fn run(store: Store, language: Language) -> Result<()> {
                 shown_at: f64::NEG_INFINITY,
                 turn_forward: true,
                 page_turn,
+                payment_reference: String::new(),
+                confirm_delete_document: false,
+                confirm_delete_payment: None,
+                confirm_delete_contact: None,
+                status_filter: 0,
                 logo_source: source,
             };
             app.refresh();
@@ -172,6 +177,12 @@ struct Drafts {
     shown_at: f64,
     turn_forward: bool,
     page_turn: bool,
+    payment_reference: String,
+    confirm_delete_document: bool,
+    confirm_delete_payment: Option<i64>,
+    confirm_delete_contact: Option<i64>,
+    /// Index into [`STATUS_FILTERS`].
+    status_filter: usize,
     /// Untinted logo, recoloured when the theme changes.
     logo_source: image::RgbaImage,
 }
@@ -182,6 +193,10 @@ fn status(state: &BillingState, fr: bool) -> (&'static str, Tone) {
     let outstanding: f64 = state.outstanding.parse().unwrap_or(0.0);
     match (state.kind.as_str(), &state.number) {
         (_, None) => (t("Brouillon", "Draft"), Tone::Draft),
+        ("quote", Some(_)) if state.closed.as_deref() == Some("refused") => {
+            (t("Refusé", "Refused"), Tone::Closed)
+        }
+        ("quote", Some(_)) if state.closed.is_some() => (t("Annulé", "Cancelled"), Tone::Closed),
         ("quote", Some(_)) if state.accepted => (t("Accepté", "Accepted"), Tone::Positive),
         ("quote", Some(_)) => (t("Finalisé", "Finalized"), Tone::Sent),
         ("credit", Some(_)) => (t("Avoir émis", "Credit issued"), Tone::Sent),
@@ -190,6 +205,28 @@ fn status(state: &BillingState, fr: bool) -> (&'static str, Tone) {
             (t("Partiellement payée", "Partly paid"), Tone::Pending)
         }
         (_, Some(_)) => (t("En attente", "Awaiting payment"), Tone::Pending),
+    }
+}
+
+/// Status filter labels (fr, en) shown above document lists.
+const STATUS_FILTERS: [(&str, &str); 6] = [
+    ("Tous les états", "All statuses"),
+    ("Brouillons", "Drafts"),
+    ("En attente", "Awaiting"),
+    ("Payées ou acceptés", "Paid or accepted"),
+    ("Refusés ou annulés", "Refused or cancelled"),
+    ("Finalisés", "Finalized"),
+];
+
+fn matches_filter(filter: usize, state: &BillingState, fr: bool) -> bool {
+    let (_, tone) = status(state, fr);
+    match filter {
+        1 => state.number.is_none(),
+        2 => matches!(tone, Tone::Pending | Tone::Sent) && state.number.is_some(),
+        3 => matches!(tone, Tone::Positive),
+        4 => matches!(tone, Tone::Closed),
+        5 => state.number.is_some(),
+        _ => true,
     }
 }
 
@@ -355,87 +392,79 @@ impl eframe::App for Drafts {
             .exact_width(246.0)
             .resizable(false)
             .show_separator_line(false)
-            .frame(
-                egui::Frame::new()
-                    .fill(crate::brand::with_alpha(crate::brand::deep(), 242))
-                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_white_alpha(28)))
-                    .corner_radius(26)
-                    .outer_margin(12)
-                    .inner_margin(16)
-                    .shadow(egui::Shadow {
-                        offset: [0, 10],
-                        blur: 30,
-                        spread: 0,
-                        color: crate::brand::with_alpha(crate::brand::deep(), 70),
-                    }),
-            )
+            .frame(egui::Frame::NONE)
             .show(ctx, |ui| {
-                ui.add_space(8.0);
-                ui.image((self.logo.id(), egui::vec2(54.0, 54.0)));
-                ui.label(
-                    egui::RichText::new("FactureCraft")
-                        .size(20.0)
-                        .strong()
-                        .color(CREAM),
-                );
-                let (line, _) = ui.allocate_exact_size(egui::vec2(38.0, 3.0), egui::Sense::hover());
-                ui.painter().rect_filled(line, 2.0, AMBER);
-                ui.add_space(17.0);
-                if let Some(index) = NAVIGATION.iter().position(|page| *page == self.page) {
-                    let step = 40.0 + ui.spacing().item_spacing.y;
-                    let start = ui.cursor().min + egui::vec2(0.0, step * index as f32);
-                    crate::brand::nav_indicator(
-                        ui,
-                        egui::Rect::from_min_size(start, egui::vec2(ui.available_width(), 40.0)),
+                let fill = crate::brand::with_alpha(crate::brand::deep(), 242);
+                let shadow = crate::brand::with_alpha(crate::brand::deep(), 70);
+                crate::brand::glass_panel(ui, fill, 26, Some(shadow), |ui| {
+                    ui.add_space(8.0);
+                    ui.image((self.logo.id(), egui::vec2(54.0, 54.0)));
+                    ui.label(
+                        egui::RichText::new("FactureCraft")
+                            .size(20.0)
+                            .strong()
+                            .color(CREAM),
                     );
-                }
-                for (page, icon, label) in [
-                    (Page::Dashboard, "📊", t("Tableau de bord", "Dashboard")),
-                    (Page::Quotes, "🗋", t("Devis", "Quotes")),
-                    (Page::Invoices, "🗐", t("Factures", "Invoices")),
-                    (Page::Clients, "👤", t("Clients", "Clients")),
-                    (
-                        Page::Products,
-                        "📦",
-                        t("Produits & services", "Products & services"),
-                    ),
-                    (Page::Archive, "🗄", t("Archives", "Archive")),
-                    (Page::Settings, "⚙", t("Paramètres", "Settings")),
-                ] {
-                    if ui
-                        .add_enabled_ui(!self.composing, |ui| {
-                            crate::brand::nav_item(ui, icon, label, self.page == page)
-                        })
-                        .inner
-                        .clicked()
-                    {
-                        self.page = page;
-                        if page == Page::Settings {
-                            match self.store.issuer() {
-                                Ok(issuer) => self.issuer = issuer,
-                                Err(error) => self.error = Some(error.to_string()),
-                            }
-                        }
-                        self.refresh();
+                    let (line, _) =
+                        ui.allocate_exact_size(egui::vec2(38.0, 3.0), egui::Sense::hover());
+                    ui.painter().rect_filled(line, 2.0, AMBER);
+                    ui.add_space(17.0);
+                    if let Some(index) = NAVIGATION.iter().position(|page| *page == self.page) {
+                        let step = 40.0 + ui.spacing().item_spacing.y;
+                        let start = ui.cursor().min + egui::vec2(0.0, step * index as f32);
+                        crate::brand::nav_indicator(
+                            ui,
+                            egui::Rect::from_min_size(
+                                start,
+                                egui::vec2(ui.available_width(), 40.0),
+                            ),
+                        );
                     }
-                }
+                    for (page, icon, label) in [
+                        (Page::Dashboard, "📊", t("Tableau de bord", "Dashboard")),
+                        (Page::Quotes, "🗋", t("Devis", "Quotes")),
+                        (Page::Invoices, "🗐", t("Factures", "Invoices")),
+                        (Page::Clients, "👤", t("Clients", "Clients")),
+                        (
+                            Page::Products,
+                            "📦",
+                            t("Produits & services", "Products & services"),
+                        ),
+                        (Page::Archive, "🗄", t("Archives", "Archive")),
+                        (Page::Settings, "⚙", t("Paramètres", "Settings")),
+                    ] {
+                        if ui
+                            .add_enabled_ui(!self.composing, |ui| {
+                                crate::brand::nav_item(ui, icon, label, self.page == page)
+                            })
+                            .inner
+                            .clicked()
+                        {
+                            self.page = page;
+                            if page == Page::Settings {
+                                match self.store.issuer() {
+                                    Ok(issuer) => self.issuer = issuer,
+                                    Err(error) => self.error = Some(error.to_string()),
+                                }
+                            }
+                            self.refresh();
+                        }
+                    }
+                });
             });
         if matches!(self.page, Page::Quotes | Page::Invoices)
             && self.composing
             && ctx.content_rect().width() >= 800.0
         {
             egui::SidePanel::right("quote_preview")
-                .default_width(340.0)
-                .min_width(300.0)
+                // Grows with the window, like a page beside the form.
+                .exact_width((ctx.content_rect().width() * 0.34).clamp(320.0, 620.0))
                 .show_separator_line(false)
-                .frame(
-                    egui::Frame::new()
-                        .fill(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 150))
-                        .corner_radius(22)
-                        .outer_margin(12)
-                        .inner_margin(16),
-                )
-                .show(ctx, |ui| self.preview(ui));
+                .frame(egui::Frame::NONE)
+                .show(ctx, |ui| {
+                    let fill = egui::Color32::from_rgba_unmultiplied(255, 255, 255, 150);
+                    crate::brand::glass_panel(ui, fill, 22, None, |ui| self.preview(ui));
+                });
         }
         egui::CentralPanel::default()
             .frame(egui::Frame::new().inner_margin(egui::Margin { left: 18, right: 28, top: 28, bottom: 20 }))
@@ -445,6 +474,19 @@ impl eframe::App for Drafts {
                     ctx.request_repaint();
                     crate::brand::page_turn(ui, turn, self.turn_forward);
                 }
+                // Readable measure on large windows: content is capped and centred.
+                let measure = match self.page {
+                    Page::Dashboard => 1280.0,
+                    _ if self.composing => 980.0,
+                    _ => 1080.0,
+                };
+                let space = ui.available_rect_before_wrap();
+                let width = space.width().min(measure);
+                let column = egui::Rect::from_min_size(
+                    egui::pos2(space.center().x - width / 2.0, space.top()),
+                    egui::vec2(width, space.height()),
+                );
+                ui.scope_builder(egui::UiBuilder::new().max_rect(column), |ui| {
                 if self.page == Page::Dashboard {
                     if let Some(error) = &self.error {
                         ui.colored_label(ui.visuals().error_fg_color, error);
@@ -502,17 +544,22 @@ impl eframe::App for Drafts {
                     );
                     if let Some(contact) = &mut self.new_contact {
                         let mut close = false;
-                        egui::Frame::group(ui.style())
-                            .inner_margin(16)
-                            .show(ui, |ui| {
-                                for (label, field) in [
-                                    (t("Nom ou société", "Name or company"), &mut contact.name),
-                                    (t("E-mail", "Email"), &mut contact.email),
-                                    (t("Adresse", "Address"), &mut contact.address),
-                                ] {
-                                    ui.label(label);
-                                    ui.add(crate::brand::field(field));
-                                }
+                        crate::brand::card(ui, |ui| {
+                                crate::brand::card_title(ui, if contact.id.is_some() { t("Modifier le client", "Edit client") } else { t("Nouveau client", "New client") });
+                                egui::Grid::new("contact_form").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+                                    for (label, field, rows) in [
+                                        (t("Nom ou société", "Name or company"), &mut contact.name, 1),
+                                        (t("Adresse", "Address"), &mut contact.address, 2),
+                                        (t("Pays", "Country"), &mut contact.country, 1),
+                                        (t("N° d’entreprise", "Company number"), &mut contact.registration, 1),
+                                        (t("E-mail", "Email"), &mut contact.email, 1),
+                                    ] {
+                                        ui.label(label);
+                                        let edit = if rows > 1 { crate::brand::area(field).desired_rows(rows) } else { crate::brand::field(field) };
+                                        ui.add(edit.desired_width(ui.available_width()));
+                                        ui.end_row();
+                                    }
+                                });
                                 ui.horizontal(|ui| {
                                     if ui
                                         .button(t("Enregistrer dans le carnet", "Save contact"))
@@ -547,6 +594,8 @@ impl eframe::App for Drafts {
                         .id_salt("contacts")
                         .show(ui, |ui| {
                             let mut found = false;
+                            let mut edit_contact = None;
+                            let mut delete_contact = None;
                             for contact in &self.contacts {
                                 if ![&contact.name, &contact.email, &contact.address]
                                     .iter()
@@ -555,22 +604,53 @@ impl eframe::App for Drafts {
                                     continue;
                                 }
                                 found = true;
-                                egui::Frame::group(ui.style())
-                                    .fill(egui::Color32::WHITE)
-                                    .inner_margin(12)
-                                    .corner_radius(8)
-                                    .show(ui, |ui| {
+                                crate::brand::card(ui, |ui| {
                                         ui.set_min_width(ui.available_width());
-                                        ui.strong(&contact.name);
-                                        for field in [&contact.email, &contact.address] {
-                                            if !field.is_empty() {
-                                                ui.weak(field);
-                                            }
-                                        }
+                                        ui.horizontal(|ui| {
+                                            ui.vertical(|ui| {
+                                                ui.strong(&contact.name);
+                                                for field in [&contact.email, &contact.address.replace('\n', ", "), &contact.registration] {
+                                                    if !field.is_empty() {
+                                                        ui.weak(field);
+                                                    }
+                                                }
+                                            });
+                                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                                match contact.id {
+                                                    Some(id) => {
+                                                        if self.confirm_delete_contact == Some(id) {
+                                                            if ui.button(egui::RichText::new(t("Confirmer la suppression", "Confirm deletion")).color(ui.visuals().error_fg_color)).clicked() {
+                                                                delete_contact = Some(id);
+                                                            }
+                                                        } else if ui.button(t("Supprimer", "Delete")).clicked() {
+                                                            self.confirm_delete_contact = Some(id);
+                                                        }
+                                                        if ui.button(t("Modifier", "Edit")).clicked() {
+                                                            edit_contact = Some(contact.clone());
+                                                        }
+                                                    }
+                                                    None => {
+                                                        if ui.button(t("Copier dans le carnet", "Copy to address book")).on_hover_text(t("Contact importé de Facture.net, en lecture seule", "Imported from Facture.net, read only")).clicked() {
+                                                            edit_contact = Some(contact.clone());
+                                                        }
+                                                    }
+                                                }
+                                            });
+                                        });
                                     });
                             }
                             if !found {
                                 ui.weak(t("Aucun contact trouvé.", "No contacts found."));
+                            }
+                            if let Some(contact) = edit_contact {
+                                self.new_contact = Some(contact);
+                            }
+                            if let Some(id) = delete_contact {
+                                self.confirm_delete_contact = None;
+                                if let Err(error) = self.store.delete_contact(id) {
+                                    self.error = Some(error.to_string());
+                                }
+                                self.refresh();
                             }
                         });
                     return;
@@ -656,6 +736,9 @@ impl eframe::App for Drafts {
                                 }
                             }
                             self.quote = self.new_quote();
+                            if self.page == Page::Invoices {
+                                self.quote.due_date = self.store.date_in_days(30).unwrap_or_default();
+                            }
                             self.currency = "EUR".into();
                             self.document_language = self.language;
                             self.error = None;
@@ -667,9 +750,7 @@ impl eframe::App for Drafts {
                     egui::ScrollArea::vertical()
                         .id_salt("editor")
                         .show(ui, |ui| {
-                            egui::Frame::group(ui.style())
-                                .inner_margin(16)
-                                .show(ui, |ui| {
+                            crate::brand::card(ui, |ui| {
                                     ui.label(t("Titre du devis", "Quote title"));
                                     ui.add(
                                         crate::brand::field(&mut self.title)
@@ -752,6 +833,7 @@ impl eframe::App for Drafts {
                                         .clicked()
                                     {
                                         let contact = facturecraft_core::contacts::Contact {
+                                            id: None,
                                             name: self.quote.recipient.clone(),
                                             email: self.quote.recipient_email.clone(),
                                             address: self.quote.recipient_address.clone(),
@@ -847,6 +929,8 @@ impl eframe::App for Drafts {
                                             (t("Conditions de règlement", "Payment terms"), &mut self.quote.payment_terms),
                                             (t("Mode de règlement", "Payment method"), &mut self.quote.payment_method),
                                             (t("Validité du devis", "Quote valid for"), &mut self.quote.valid_until),
+                                            (t("Échéance (AAAA-MM-JJ, factures)", "Due date (YYYY-MM-DD, invoices)"), &mut self.quote.due_date),
+                                            (t("Date de prestation (factures)", "Service date (invoices)"), &mut self.quote.service_date),
                                         ] {
                                             ui.label(label);
                                             ui.add(crate::brand::field(field).desired_width(ui.available_width()));
@@ -968,11 +1052,7 @@ impl eframe::App for Drafts {
                     ui.colored_label(ui.visuals().error_fg_color, error);
                 }
                 if self.items.is_empty() && !self.composing && self.page == Page::Quotes {
-                    egui::Frame::group(ui.style())
-                        .fill(egui::Color32::WHITE)
-                        .inner_margin(32)
-                        .corner_radius(12)
-                        .show(ui, |ui| {
+                    crate::brand::card(ui, |ui| {
                             ui.set_min_width(ui.available_width());
                             crate::brand::card_title(ui, t("Créez votre premier devis", "Create your first quote"));
                             ui.label(t(
@@ -1011,10 +1091,19 @@ impl eframe::App for Drafts {
                 }
                 let mut selected = None;
                 if !self.composing {
-                    ui.add(
-                        crate::brand::field(&mut self.quote_query)
-                            .hint_text(t("Rechercher un document", "Search documents")),
-                    );
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            crate::brand::field(&mut self.quote_query)
+                                .hint_text(t("Rechercher : titre, client, numéro", "Search: title, client, number")),
+                        );
+                        egui::ComboBox::from_id_salt("status_filter")
+                            .selected_text(if fr { STATUS_FILTERS[self.status_filter].0 } else { STATUS_FILTERS[self.status_filter].1 })
+                            .show_ui(ui, |ui| {
+                                for (index, (label_fr, label_en)) in STATUS_FILTERS.iter().enumerate() {
+                                    ui.selectable_value(&mut self.status_filter, index, if fr { *label_fr } else { *label_en });
+                                }
+                            });
+                    });
                     let query = self.quote_query.trim().to_lowercase();
                     let mut found = false;
                     egui::ScrollArea::vertical().show(ui, |ui| {
@@ -1025,17 +1114,19 @@ impl eframe::App for Drafts {
                             if (self.page == Page::Quotes) != (state.kind == "quote") {
                                 continue;
                             }
-                            if !draft.title.to_lowercase().contains(&query)
+                            if !matches_filter(self.status_filter, &state, fr) {
+                                continue;
+                            }
+                            let recipient = self.store.quote(draft.id).map(|q| q.recipient).unwrap_or_default();
+                            if ![draft.title.as_str(), recipient.as_str(), state.number.as_deref().unwrap_or("")]
+                                .iter()
+                                .any(|field| field.to_lowercase().contains(&query))
                                 && !draft.id.to_string().contains(&query)
                             {
                                 continue;
                             }
                             found = true;
-                            egui::Frame::group(ui.style())
-                                .fill(egui::Color32::WHITE)
-                                .inner_margin(16)
-                                .corner_radius(10)
-                                .show(ui, |ui| {
+                            crate::brand::card(ui, |ui| {
                                     ui.set_min_width(ui.available_width());
                                     ui.horizontal(|ui| {
                                         ui.label(egui::RichText::new(&draft.title).size(17.0).strong());
@@ -1100,6 +1191,7 @@ impl eframe::App for Drafts {
                         }
                     }
                 }
+                });
             });
         if let Some(id) = self.review {
             if let (Ok(Some(draft)), Ok(quote), Ok(state)) = (
@@ -1144,7 +1236,11 @@ impl eframe::App for Drafts {
                         }
                     }
                     let finalize_label = if live { t("Finaliser et numéroter", "Finalize and number") } else { t("Finaliser la démonstration", "Finalize demonstration") };
+                    let needs_due_date = matches!(state.kind.as_str(), "invoice" | "deposit") && quote.due_date.trim().is_empty();
                     if state.number.is_none() && ui.add(crate::brand::primary(finalize_label)).clicked() {
+                        if needs_due_date {
+                            self.error = Some(t("Indiquez la date d’échéance dans le document avant de le finaliser.", "Enter the due date in the document before finalizing it.").into());
+                        } else {
                         let result = self.store.finalize_document_versioned(id, self.review_version, |draft, quote, number, issued_on| {
                             let issuer = self.store.issuer()?;
                             let logo = self.store.logo()?;
@@ -1162,14 +1258,41 @@ impl eframe::App for Drafts {
                             })
                         });
                         match result { Ok(number) => { self.notice = Some(format!("{} {number}", if number.starts_with("TEST-") { t("Démonstration finalisée :", "Demonstration finalized:") } else { t("Document finalisé :", "Document finalized:") })); self.review = None; self.refresh(); }, Err(error) => self.error = Some(error.to_string()) }
+                        }
                     }
+                    ui.horizontal(|ui| {
+                        if matches!(state.kind.as_str(), "quote" | "invoice") && ui.button(t("Dupliquer", "Duplicate")).clicked() {
+                            let title = format!("{} {}", t("Copie de", "Copy of"), draft.title);
+                            match self.store.duplicate_document(id, &title) {
+                                Ok(copy) => { self.notice = Some(format!("{} « {} ».", t("Brouillon créé :", "Draft created:"), copy.title)); self.review = None; self.refresh(); }
+                                Err(error) => self.error = Some(error.to_string()),
+                            }
+                        }
+                        if state.number.is_none() {
+                            if self.confirm_delete_document {
+                                if ui.button(egui::RichText::new(t("Confirmer la suppression", "Confirm deletion")).color(ui.visuals().error_fg_color)).clicked() {
+                                    match self.store.delete_draft(id) {
+                                        Ok(()) => { self.notice = Some(t("Brouillon supprimé.", "Draft deleted.").into()); self.review = None; self.confirm_delete_document = false; self.refresh(); }
+                                        Err(error) => self.error = Some(error.to_string()),
+                                    }
+                                }
+                            } else if ui.button(t("Supprimer le brouillon", "Delete draft")).clicked() {
+                                self.confirm_delete_document = true;
+                            }
+                        }
+                    });
                     if state.number.is_some() {
                         if ui.button(t("Exporter le PDF figé", "Export finalized PDF")).clicked() {
                             match self.store.finalized_pdf(id) { Ok(bytes) => if let Some(path) = rfd::FileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(format!("{}.pdf", state.number.as_deref().unwrap_or("document"))).save_file() && let Err(error) = crate::operations::write_file(&path, &bytes) { self.error = Some(error.to_string()); }, Err(error) => self.error = Some(error.to_string()) }
                         }
-                        if state.kind == "quote" && !state.accepted {
-                            ui.horizontal(|ui| { ui.label(t("Date d’acceptation (AAAA-MM-JJ)", "Acceptance date (YYYY-MM-DD)")); ui.add(crate::brand::field(&mut self.event_date)); });
-                            if ui.button(t("Marquer accepté", "Mark accepted")).clicked() { match self.store.accept_quote(id, &self.event_date) { Ok(()) => { self.review = None; self.refresh(); }, Err(error) => self.error = Some(error.to_string()) } }
+                        if state.kind == "quote" && !state.accepted && state.closed.is_none() {
+                            ui.horizontal(|ui| { ui.label(t("Date (AAAA-MM-JJ)", "Date (YYYY-MM-DD)")); ui.add(crate::brand::field(&mut self.event_date)); });
+                            ui.horizontal(|ui| {
+                                if ui.button(t("Marquer accepté", "Mark accepted")).clicked() { match self.store.accept_quote(id, &self.event_date) { Ok(()) => { self.review = None; self.refresh(); }, Err(error) => self.error = Some(error.to_string()) } }
+                                for (status, label) in [("refused", t("Marquer refusé", "Mark refused")), ("cancelled", t("Marquer annulé", "Mark cancelled"))] {
+                                    if ui.button(label).clicked() { match self.store.close_quote(id, status, &self.event_date) { Ok(()) => { self.review = None; self.refresh(); }, Err(error) => self.error = Some(error.to_string()) } }
+                                }
+                            });
                         }
                         if state.kind == "quote" && state.accepted {
                             for (kind, label) in [("invoice", t("Créer une facture", "Create invoice")), ("deposit", t("Créer un acompte", "Create deposit"))] {
@@ -1180,12 +1303,28 @@ impl eframe::App for Drafts {
                         if matches!(state.kind.as_str(), "invoice" | "deposit") {
                             ui.label(format!("{}: {} · {}: {} · {}: {} · {}: {}", t("Acomptes", "Deposits"), state.deposits, t("Réglé", "Paid"), state.paid, t("Avoirs", "Credits"), state.credited, t("Reste à payer", "Outstanding"), state.outstanding));
                             ui.horizontal(|ui| { ui.label(t("Montant", "Amount")); ui.add(crate::brand::field(&mut self.payment_amount)); ui.label(t("Date AAAA-MM-JJ", "Date YYYY-MM-DD")); ui.add(crate::brand::field(&mut self.event_date)); });
-                            ui.horizontal(|ui| { ui.label(t("Mode", "Method")); ui.add(crate::brand::field(&mut self.payment_method)); });
-                            if ui.button(t("Enregistrer le règlement", "Record payment")).clicked() { match self.store.record_payment(id, &self.payment_amount, &self.event_date, &self.payment_method, "") { Ok(()) => { self.review = None; self.refresh(); }, Err(error) => self.error = Some(error.to_string()) } }
+                            ui.horizontal(|ui| { ui.label(t("Mode", "Method")); ui.add(crate::brand::field(&mut self.payment_method)); ui.label(t("Référence", "Reference")); ui.add(crate::brand::field(&mut self.payment_reference)); });
+                            if ui.button(t("Enregistrer le règlement", "Record payment")).clicked() { match self.store.record_payment(id, &self.payment_amount, &self.event_date, &self.payment_method, &self.payment_reference) { Ok(()) => { self.payment_amount.clear(); self.payment_reference.clear(); self.error = None; self.refresh(); }, Err(error) => self.error = Some(error.to_string()) } }
+                            let payments = self.store.payments(id).unwrap_or_default();
+                            if !payments.is_empty() {
+                                crate::brand::section(ui, t("Règlements reçus", "Payments received"));
+                            }
+                            for payment in payments {
+                                ui.horizontal(|ui| {
+                                    ui.label(format!("{} · {} · {}{}", payment.date, crate::brand::money(&payment.amount, &draft.currency, fr), payment.method, if payment.reference.is_empty() { String::new() } else { format!(" · {}", payment.reference) }));
+                                    if self.confirm_delete_payment == Some(payment.id) {
+                                        if ui.button(egui::RichText::new(t("Confirmer", "Confirm")).color(ui.visuals().error_fg_color)).clicked() {
+                                            match self.store.delete_payment(payment.id) { Ok(()) => { self.confirm_delete_payment = None; self.refresh(); }, Err(error) => self.error = Some(error.to_string()) }
+                                        }
+                                    } else if ui.small_button(t("Annuler ce règlement", "Remove this payment")).clicked() {
+                                        self.confirm_delete_payment = Some(payment.id);
+                                    }
+                                });
+                            }
                         }
                     }
                     if let Some(error) = &self.error { ui.colored_label(ui.visuals().error_fg_color, error); }
-                    if ui.button(t("Fermer", "Close")).clicked() { self.review = None; self.error = None; }
+                    if ui.button(t("Fermer", "Close")).clicked() { self.review = None; self.error = None; self.confirm_delete_document = false; self.confirm_delete_payment = None; }
                 });
             } else {
                 self.review = None;
@@ -1663,9 +1802,26 @@ impl Drafts {
                         ui.end_row();
                     }
                 });
+            ui.checkbox(
+                &mut self.issuer.cgv_on_invoices,
+                t(
+                    "Imprimer aussi les CGV sur les factures",
+                    "Also print the terms of sale on invoices",
+                ),
+            );
             ui.label(t(
-                "Conditions générales de vente (imprimées sur une page dédiée des devis)",
-                "General terms of sale (printed on a dedicated page of quotes)",
+                "Mention de pénalités de retard (factures)",
+                "Late-payment clause (invoices)",
+            ));
+            ui.add(
+                crate::brand::area(&mut self.issuer.late_penalties)
+                    .hint_text(facturecraft_core::issuer::DEFAULT_LATE_PENALTIES)
+                    .desired_rows(3)
+                    .desired_width(f32::INFINITY),
+            );
+            ui.label(t(
+                "Conditions générales de vente (page dédiée des devis, copiées dans chaque nouveau document)",
+                "General terms of sale (dedicated page of quotes, copied into each new document)",
             ));
             ui.add(
                 crate::brand::area(&mut self.issuer.cgv)

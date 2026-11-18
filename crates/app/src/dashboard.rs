@@ -1,4 +1,4 @@
-use crate::brand::{self, AMBER, INK, LILAC, MUTED, PLUM};
+use crate::brand::{self, AMBER, INK, MUTED, accent, soft};
 use eframe::egui::{self, RichText};
 use facturecraft_core::dashboard::Dashboard;
 
@@ -10,23 +10,14 @@ pub enum Action {
 pub fn show(ui: &mut egui::Ui, data: &Dashboard, fr: bool) -> Option<Action> {
     let t = |f: &'static str, e: &'static str| if fr { f } else { e };
     let mut action = None;
-    ui.horizontal(|ui| {
-        ui.vertical(|ui| {
-            ui.label(
-                RichText::new(t("Tableau de bord", "Dashboard"))
-                    .size(30.0)
-                    .strong()
-                    .color(INK),
-            );
-            ui.label(
-                RichText::new(t(
-                    "Vue d’ensemble de votre activité",
-                    "Overview of your activity",
-                ))
-                .color(MUTED),
-            );
-        });
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+    brand::page_header(
+        ui,
+        t("Tableau de bord", "Dashboard"),
+        t(
+            "Vue d’ensemble de votre activité",
+            "Overview of your activity",
+        ),
+        |ui| {
             if ui
                 .button("▶")
                 .on_hover_text(t("Année suivante", "Next year"))
@@ -56,9 +47,8 @@ pub fn show(ui: &mut egui::Ui, data: &Dashboard, fr: bool) -> Option<Action> {
                         }
                     });
             }
-        });
-    });
-    ui.add_space(14.0);
+        },
+    );
 
     let money = |amount: &str| brand::money(amount, &data.currency, fr);
     let year = data.year.to_string();
@@ -106,15 +96,11 @@ pub fn show(ui: &mut egui::Ui, data: &Dashboard, fr: bool) -> Option<Action> {
         ui.set_width(full);
         ui.vertical(|ui| {
             ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new(t("Chiffre d’affaires HT", "Revenue (excl. tax)"))
-                        .size(16.0)
-                        .strong(),
-                );
+                brand::card_title(ui, t("Chiffre d’affaires HT", "Revenue (excl. tax)"));
                 ui.label(
                     RichText::new(money(&data.revenue_year))
                         .strong()
-                        .color(PLUM),
+                        .color(accent()),
                 );
             });
             chart(ui, data, fr);
@@ -124,11 +110,7 @@ pub fn show(ui: &mut egui::Ui, data: &Dashboard, fr: bool) -> Option<Action> {
     brand::card(ui, |ui| {
         ui.set_width(full);
         ui.vertical(|ui| {
-            ui.label(
-                RichText::new(t("Dernières activités", "Recent activity"))
-                    .size(16.0)
-                    .strong(),
-            );
+            brand::card_title(ui, t("Dernières activités", "Recent activity"));
             ui.add_space(6.0);
             if data.activity.is_empty() {
                 ui.label(
@@ -190,7 +172,7 @@ fn chart(ui: &mut egui::Ui, data: &Dashboard, fr: bool) {
         let y = bottom - fraction * (bottom - top);
         painter.line_segment(
             [egui::pos2(plot.left(), y), egui::pos2(plot.right(), y)],
-            egui::Stroke::new(1.0, brand::BORDER),
+            egui::Stroke::new(1.0, brand::border()),
         );
     }
     // ponytail: one polygon per segment keeps the fill convex for egui's tessellator.
@@ -202,19 +184,19 @@ fn chart(ui: &mut egui::Ui, data: &Dashboard, fr: bool) {
                 egui::pos2(pair[1].x, bottom),
                 egui::pos2(pair[0].x, bottom),
             ],
-            LILAC.gamma_multiply(0.55),
+            soft().gamma_multiply(0.55),
             egui::Stroke::NONE,
         ));
     }
     painter.add(egui::Shape::line(
         points.clone(),
-        egui::Stroke::new(2.5, PLUM),
+        egui::Stroke::new(2.5, accent()),
     ));
     let hovered = response
         .hover_pos()
         .map(|pos| (((pos.x - plot.left()) / step).round().clamp(0.0, 11.0)) as usize);
     for (i, point) in points.iter().enumerate() {
-        painter.circle_filled(*point, if hovered == Some(i) { 5.0 } else { 3.0 }, PLUM);
+        painter.circle_filled(*point, if hovered == Some(i) { 5.0 } else { 3.0 }, accent());
         painter.text(
             egui::pos2(point.x, plot.bottom() - 8.0),
             egui::Align2::CENTER_CENTER,
@@ -256,11 +238,11 @@ fn activity(
 ) {
     let t = |f: &'static str, e: &'static str| if fr { f } else { e };
     let (icon, title, color) = match item.kind.as_str() {
-        "quote" => ("🗋", t("Devis", "Quote"), PLUM),
-        "deposit" => ("🗐", t("Acompte", "Deposit"), PLUM),
-        "credit" => ("↺", t("Avoir", "Credit note"), PLUM),
+        "quote" => ("🗋", t("Devis", "Quote"), accent()),
+        "deposit" => ("🗐", t("Acompte", "Deposit"), accent()),
+        "credit" => ("↺", t("Avoir", "Credit note"), accent()),
         "payment" => ("✔", t("Règlement reçu", "Payment received"), AMBER),
-        _ => ("🗐", t("Facture", "Invoice"), PLUM),
+        _ => ("🗐", t("Facture", "Invoice"), accent()),
     };
     let mut detail = brand::money(&item.amount, currency, fr);
     if !item.detail.is_empty() {
@@ -268,7 +250,7 @@ fn activity(
     }
     ui.horizontal(|ui| {
         egui::Frame::new()
-            .fill(LILAC)
+            .fill(soft())
             .corner_radius(16)
             .inner_margin(egui::Margin::symmetric(9, 6))
             .show(ui, |ui| ui.label(RichText::new(icon).color(color)));

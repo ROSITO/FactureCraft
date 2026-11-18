@@ -49,6 +49,20 @@ Dans Paramètres, « Choisir un logo… » accepte un PNG ou un JPEG. L’image 
 
 Le PDF suit cette organisation : titre et date, émetteur et destinataire côte à côte, tableau des prestations (intitulé sur la première ligne de la description, détail en dessous), mentions d’exonération et totaux, puis une page Conditions et une page Conditions générales de vente. Un brouillon porte la date du jour ; un document finalisé porte sa date d’émission.
 
+## Apparence
+
+Dans Paramètres, la section Apparence propose cinq couleurs d’interface : Prune, Océan, Forêt, Corail et Ardoise. Le menu, les boutons, les sélections, le graphique et le fond de l’icône suivent la couleur choisie. Les badges d’état gardent leurs couleurs propres. La même section active ou désactive l’animation de page tournée entre les vues. Ces choix sont enregistrés dans la base locale.
+
+## Rédiger un devis détaillé
+
+La description d’une ligne commence par l’intitulé, sur la première ligne. Le détail suit en dessous, sur autant de paragraphes que nécessaire. Les conditions particulières du document s’impriment sur la page Conditions. Les conditions générales de vente sont copiées depuis Paramètres à la création du document. On peut ensuite les adapter dans l’éditeur, rubrique « Conditions générales de vente de ce document », sans modifier le modèle. « Recharger le modèle » reprend le texte de Paramètres.
+
+Mise en forme, valable dans les descriptions, les conditions et les CGV :
+
+- `**texte**` met le texte en gras, par exemple `**Forfait global : 8 000 €.**` ;
+- `# Intertitre` en début de ligne crée un intertitre en gras ;
+- une ligne vide sépare deux paragraphes.
+
 ## Utiliser MCP dans Codex ou Hermes
 
 Déclarer un serveur local stdio avec le chemin absolu du binaire installé comme commande et `mcp` comme argument. Pour choisir une base dédiée, ajouter `--db`, suivi de son chemin absolu, avant `mcp`. La liste des outils publiée par le serveur fournit les schémas d’entrée.

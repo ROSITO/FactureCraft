@@ -89,6 +89,12 @@ enum Op {
     },
 }
 
+enum RichLine {
+    /// Runs of `(text, bold)`; `true` when the line belongs to a subheading.
+    Text(Vec<(String, bool)>, bool),
+    Gap,
+}
+
 /// Positions are millimetres from the top-left corner; text `y` is the baseline.
 struct Layout<'f> {
     face: ttf_parser::Face<'f>,
@@ -136,6 +142,110 @@ impl Layout<'_> {
             lines.push(line);
         }
         lines
+    }
+
+    /// Wraps text written with the light markup used in documents:
+    /// `**bold**`, a line starting with `# ` for a subheading, and a blank line
+    /// between paragraphs.
+    fn rich(&self, text: &str, size: f64, max: f64) -> Vec<RichLine> {
+        let mut lines = Vec::new();
+        for raw in text.lines() {
+            let raw = raw.trim_end();
+            if raw.trim().is_empty() {
+                if !matches!(lines.last(), None | Some(RichLine::Gap)) {
+                    lines.push(RichLine::Gap);
+                }
+                continue;
+            }
+            let (heading, body) = match raw.trim_start().strip_prefix("# ") {
+                Some(title) => (true, title.trim()),
+                None => (false, raw),
+            };
+            // Words with their weight and whether a space precedes them.
+            let mut words: Vec<(String, bool, bool)> = Vec::new();
+            let mut space = false;
+            for (index, span) in body.split("**").enumerate() {
+                let bold = heading || index % 2 == 1;
+                let mut word = String::new();
+                for c in span.chars() {
+                    if c.is_whitespace() {
+                        if !word.is_empty() {
+                            words.push((std::mem::take(&mut word), bold, space));
+                        }
+                        // Each word records whether whitespace preceded it, so spans
+                        // glued together (`**prix**,`) stay glued.
+                        space = true;
+                    } else {
+                        word.push(c);
+                    }
+                }
+                if !word.is_empty() {
+                    words.push((word, bold, space));
+                    space = false;
+                }
+            }
+            let mut line: Vec<(String, bool)> = Vec::new();
+            let mut width = 0.0;
+            for (word, bold, spaced) in words {
+                let gap = if spaced && !line.is_empty() {
+                    self.width(" ", size)
+                } else {
+                    0.0
+                };
+                let advance = self.measure(&word, size, bold);
+                if !line.is_empty() && width + gap + advance > max {
+                    lines.push(RichLine::Text(std::mem::take(&mut line), heading));
+                    width = 0.0;
+                } else if gap > 0.0 {
+                    width += gap;
+                    // The space belongs to the text before it, in that text's weight.
+                    if let Some((text, _)) = line.last_mut() {
+                        text.push(' ');
+                    }
+                }
+                width += advance;
+                match line.last_mut() {
+                    Some((text, weight)) if *weight == bold => text.push_str(&word),
+                    _ => line.push((word, bold)),
+                }
+            }
+            if !line.is_empty() {
+                lines.push(RichLine::Text(line, heading));
+            }
+        }
+        while matches!(lines.last(), Some(RichLine::Gap)) {
+            lines.pop();
+        }
+        lines
+    }
+
+    fn runs(&mut self, x: f64, size: f64, runs: &[(String, bool)], color: Rgb8) {
+        let mut x = x;
+        for (text, bold) in runs {
+            if !text.trim().is_empty() {
+                self.text(x, size, text, color, *bold, Align::Left);
+            }
+            x += self.measure(text, size, *bold);
+        }
+    }
+
+    /// Flowing text across pages; `gap` separates paragraphs.
+    fn flow(&mut self, text: &str, size: f64, line: f64, gap: f64) {
+        for item in self.rich(text, size, RIGHT - LEFT) {
+            match item {
+                RichLine::Gap => self.y += gap,
+                RichLine::Text(runs, heading) => {
+                    if heading && !self.ensure(line * 2.0) {
+                        self.y += gap * 0.6;
+                    } else if !heading {
+                        self.ensure(line);
+                    }
+                    let size = if heading { size + 1.0 } else { size };
+                    self.runs(LEFT, size, &runs, INK);
+                    self.y += if heading { line + 1.0 } else { line };
+                }
+            }
+        }
     }
 
     fn page(&mut self) -> &mut Vec<Op> {
@@ -341,14 +451,10 @@ pub fn render(document: &Document<'_>) -> Result<Vec<u8>> {
         let mut text = line.description.lines();
         let title = text.next().unwrap_or("");
         let details = text.collect::<Vec<_>>().join("\n");
-        let title_lines = layout.wrap(title, TABLE_FONT, description_width);
-        let detail_lines = if details.trim().is_empty() {
-            Vec::new()
-        } else {
-            layout.wrap(details.trim_matches('\n'), TABLE_FONT, description_width)
-        };
+        let title_lines = layout.rich(title, TABLE_FONT, description_width);
+        let detail_lines = layout.rich(details.trim_matches('\n'), TABLE_FONT, description_width);
         let fill = (index % 2 == 1).then_some(ALTERNATE);
-        if layout.ensure(5.0 + LINE * title_lines.len() as f64) {
+        if layout.ensure(5.0 + LINE * title_lines.len().max(1) as f64) {
             table_header(&mut layout);
         }
         let mut chunk = Chunk::start(&layout);
@@ -364,14 +470,20 @@ pub fn render(document: &Document<'_>) -> Result<Vec<u8>> {
         for ((_, right), value) in columns.iter().zip(&values) {
             layout.text(right - 1.0, TABLE_FONT, value, INK, false, Align::Right);
         }
-        for text in &title_lines {
-            layout.text(LEFT + 2.5, TABLE_FONT, text, INK, false, Align::Left);
-            layout.y += LINE;
+        for item in &title_lines {
+            if let RichLine::Text(runs, _) = item {
+                layout.runs(LEFT + 2.5, TABLE_FONT, runs, INK);
+                layout.y += LINE;
+            }
         }
         if !detail_lines.is_empty() {
             layout.y += LINE;
         }
-        for text in &detail_lines {
+        for item in &detail_lines {
+            let RichLine::Text(runs, heading) = item else {
+                layout.y += 2.0;
+                continue;
+            };
             if layout.y + 2.5 > BOTTOM {
                 chunk.close(&mut layout, fill);
                 layout.new_page();
@@ -379,7 +491,12 @@ pub fn render(document: &Document<'_>) -> Result<Vec<u8>> {
                 chunk = Chunk::start(&layout);
                 layout.y += 4.8;
             }
-            layout.text(LEFT + 2.5, TABLE_FONT, text, INK, false, Align::Left);
+            let size = if *heading {
+                TABLE_FONT + 0.5
+            } else {
+                TABLE_FONT
+            };
+            layout.runs(LEFT + 2.5, size, runs, INK);
             layout.y += LINE;
         }
         layout.y -= 1.5;
@@ -471,35 +588,31 @@ pub fn render(document: &Document<'_>) -> Result<Vec<u8>> {
     if !conditions.is_empty() || !quote.terms.trim().is_empty() {
         layout.new_page();
         layout.heading(t("Conditions", "Terms"));
-        for (label, value) in conditions {
+        for (label, value) in &conditions {
             layout.text(LEFT, 8.5, label, INK, true, Align::Left);
             let x = LEFT + layout.measure(label, 8.5, true) + 2.0;
             layout.text(x, 8.5, value, INK, false, Align::Left);
             layout.y += LINE;
         }
         if !quote.terms.trim().is_empty() {
-            layout.y += LINE;
-            for line in layout.wrap(quote.terms.trim(), 8.5, RIGHT - LEFT) {
-                layout.ensure(LINE);
-                layout.text(LEFT, 8.5, &line, INK, false, Align::Left);
-                layout.y += LINE;
+            if !conditions.is_empty() {
+                layout.y += 2.0;
             }
+            layout.flow(quote.terms.trim(), 7.8, 3.75, 2.0);
         }
     }
 
     // General terms of sale
-    if document.kind == "quote" && !issuer.cgv.trim().is_empty() {
+    // A document keeps its own copy; older drafts fall back to the issuer's text.
+    let cgv = if quote.cgv.trim().is_empty() {
+        issuer.cgv.trim()
+    } else {
+        quote.cgv.trim()
+    };
+    if document.kind == "quote" && !cgv.is_empty() {
         layout.new_page();
         layout.heading(t("Conditions générales de vente", "General terms of sale"));
-        for line in layout.wrap(issuer.cgv.trim(), 8.0, RIGHT - LEFT) {
-            if line.trim().is_empty() {
-                layout.y += 2.2;
-                continue;
-            }
-            layout.ensure(4.2);
-            layout.text(LEFT, 8.0, &line, INK, false, Align::Left);
-            layout.y += 4.2;
-        }
+        layout.flow(cgv, 7.8, 3.9, 2.4);
     }
 
     // Footer
@@ -829,6 +942,46 @@ mod tests {
         assert!(bytes.starts_with(b"%PDF-"));
         assert!(bytes.windows(5).any(|bytes| bytes == b"%%EOF"));
         assert_eq!(long_date("2026-10-25", true), "25 octobre 2026");
+    }
+
+    #[test]
+    fn light_markup_gives_bold_runs_headings_and_paragraphs() {
+        let face = ttf_parser::Face::parse(FONT, 0).unwrap();
+        let bold = ttf_parser::Face::parse(BOLD_FONT, 0).unwrap();
+        let layout = Layout {
+            face,
+            bold,
+            pages: vec![Vec::new()],
+            y: 0.0,
+        };
+        let lines = layout.rich(
+            "**Forfait :** 8 000 €, **net**.\n\n\n# Titre\nsuite",
+            8.0,
+            500.0,
+        );
+        let RichLine::Text(runs, false) = &lines[0] else {
+            panic!("first line")
+        };
+        assert_eq!(
+            runs,
+            &vec![
+                ("Forfait : ".to_string(), true),
+                ("8 000 €, ".to_string(), false),
+                ("net".to_string(), true),
+                (".".to_string(), false),
+            ]
+        );
+        assert!(
+            matches!(lines[1], RichLine::Gap),
+            "blank lines collapse to one gap"
+        );
+        assert!(
+            matches!(&lines[2], RichLine::Text(runs, true) if runs[0] == ("Titre".to_string(), true))
+        );
+        assert!(matches!(&lines[3], RichLine::Text(_, false)));
+        assert_eq!(lines.len(), 4);
+        let narrow = layout.rich("un deux trois quatre", 8.0, 12.0);
+        assert!(narrow.len() > 1, "wraps to the width");
     }
 
     #[test]

@@ -3,12 +3,17 @@ use anyhow::Result;
 use eframe::egui;
 use facturecraft_core::{Draft, Store};
 
-use crate::brand::{AMBER, CREAM, INK, PLUM, Tone};
+use crate::brand::{AMBER, CREAM, INK, Tone, accent};
 use facturecraft_core::{billing::BillingState, products::Product};
 
 pub fn run(store: Store, language: Language) -> Result<()> {
-    let image = image::load_from_memory(include_bytes!("../../../assets/facturecraft-logo.png"))?
+    if let Some(theme) = store.preference("ui.theme")? {
+        crate::brand::set_theme(&theme);
+    }
+    let page_turn = store.preference("ui.page_turn")?.as_deref() != Some("off");
+    let source = image::load_from_memory(include_bytes!("../../../assets/facturecraft-logo.png"))?
         .into_rgba8();
+    let image = crate::brand::tint_logo(&source);
     let (width, height) = image.dimensions();
     let mark = egui::ColorImage::from_rgba_unmultiplied([width as usize, height as usize], &image);
     let icon = egui::IconData {
@@ -87,7 +92,10 @@ pub fn run(store: Store, language: Language) -> Result<()> {
                 confirm_live: false,
                 logo_texture: None,
                 shown_page: Page::Dashboard,
-                shown_at: 0.0,
+                shown_at: f64::NEG_INFINITY,
+                turn_forward: true,
+                page_turn,
+                logo_source: source,
             };
             app.refresh();
             Ok(Box::new(app))
@@ -95,6 +103,17 @@ pub fn run(store: Store, language: Language) -> Result<()> {
     )
     .map_err(|err| anyhow::anyhow!("{err}"))
 }
+
+/// Sidebar order.
+const NAVIGATION: [Page; 7] = [
+    Page::Dashboard,
+    Page::Quotes,
+    Page::Invoices,
+    Page::Clients,
+    Page::Products,
+    Page::Archive,
+    Page::Settings,
+];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Page {
@@ -151,6 +170,10 @@ struct Drafts {
     /// Page shown last frame and when it appeared, for the fade-in.
     shown_page: Page,
     shown_at: f64,
+    turn_forward: bool,
+    page_turn: bool,
+    /// Untinted logo, recoloured when the theme changes.
+    logo_source: image::RgbaImage,
 }
 
 /// Localized status of a document, coloured like the brand kit badges.
@@ -322,6 +345,9 @@ impl eframe::App for Drafts {
         crate::brand::paint_background(ctx);
         let now = ctx.input(|input| input.time);
         if self.shown_page != self.page {
+            // Going down the menu turns the page forward, going up turns it back.
+            self.turn_forward = NAVIGATION.iter().position(|p| *p == self.page)
+                >= NAVIGATION.iter().position(|p| *p == self.shown_page);
             self.shown_page = self.page;
             self.shown_at = now;
         }
@@ -331,7 +357,7 @@ impl eframe::App for Drafts {
             .show_separator_line(false)
             .frame(
                 egui::Frame::new()
-                    .fill(egui::Color32::from_rgba_unmultiplied(58, 22, 64, 242))
+                    .fill(crate::brand::with_alpha(crate::brand::deep(), 242))
                     .stroke(egui::Stroke::new(1.0, egui::Color32::from_white_alpha(28)))
                     .corner_radius(26)
                     .outer_margin(12)
@@ -340,7 +366,7 @@ impl eframe::App for Drafts {
                         offset: [0, 10],
                         blur: 30,
                         spread: 0,
-                        color: egui::Color32::from_rgba_unmultiplied(58, 22, 64, 70),
+                        color: crate::brand::with_alpha(crate::brand::deep(), 70),
                     }),
             )
             .show(ctx, |ui| {
@@ -355,16 +381,7 @@ impl eframe::App for Drafts {
                 let (line, _) = ui.allocate_exact_size(egui::vec2(38.0, 3.0), egui::Sense::hover());
                 ui.painter().rect_filled(line, 2.0, AMBER);
                 ui.add_space(17.0);
-                let pages = [
-                    Page::Dashboard,
-                    Page::Quotes,
-                    Page::Invoices,
-                    Page::Clients,
-                    Page::Products,
-                    Page::Archive,
-                    Page::Settings,
-                ];
-                if let Some(index) = pages.iter().position(|page| *page == self.page) {
+                if let Some(index) = NAVIGATION.iter().position(|page| *page == self.page) {
                     let step = 40.0 + ui.spacing().item_spacing.y;
                     let start = ui.cursor().min + egui::vec2(0.0, step * index as f32);
                     crate::brand::nav_indicator(
@@ -423,13 +440,11 @@ impl eframe::App for Drafts {
         egui::CentralPanel::default()
             .frame(egui::Frame::new().inner_margin(egui::Margin { left: 18, right: 28, top: 28, bottom: 20 }))
             .show(ctx, |ui| {
-                let appear = ((now - self.shown_at) / 0.22).clamp(0.0, 1.0) as f32;
-                if appear < 1.0 {
+                let turn = ((now - self.shown_at) / 0.5).clamp(0.0, 1.0) as f32;
+                if turn < 1.0 && self.page_turn {
                     ctx.request_repaint();
+                    crate::brand::page_turn(ui, turn, self.turn_forward);
                 }
-                let eased = 1.0 - (1.0 - appear).powi(3);
-                ui.set_opacity(eased);
-                ui.add_space((1.0 - eased) * 12.0);
                 if self.page == Page::Dashboard {
                     if let Some(error) = &self.error {
                         ui.colored_label(ui.visuals().error_fg_color, error);
@@ -458,7 +473,14 @@ impl eframe::App for Drafts {
                     return;
                 }
                 if self.page == Page::Settings {
+                    crate::brand::page_header(
+                        ui,
+                        t("Paramètres", "Settings"),
+                        t("Identité, mise en page des documents et numérotation", "Identity, document layout and numbering"),
+                        |_| {},
+                    );
                     egui::ScrollArea::vertical().id_salt("settings").show(ui, |ui| {
+                        self.appearance_settings(ui, fr);
                         if let Some(notice) = &self.notice { ui.label(notice); }
                         if let Some(error) = &self.error { ui.colored_label(ui.visuals().error_fg_color, error); }
                         self.issuer_settings(ui, fr);
@@ -468,23 +490,16 @@ impl eframe::App for Drafts {
                     return;
                 }
                 if self.page == Page::Clients {
-                    ui.horizontal(|ui| {
-                        ui.heading(t("Carnet clients", "Client directory"));
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui
-                                .add(
-                                    egui::Button::new(
-                                        egui::RichText::new(t("+ Nouveau client", "+ New client"))
-                                            .color(CREAM),
-                                    )
-                                    .fill(PLUM),
-                                )
-                                .clicked()
-                            {
+                    crate::brand::page_header(
+                        ui,
+                        t("Clients", "Clients"),
+                        t("Vos clients et sociétés, y compris ceux importés de Facture.net", "Your clients and companies, including those imported from Facture.net"),
+                        |ui| {
+                            if ui.add(crate::brand::primary(t("+ Nouveau client", "+ New client"))).clicked() {
                                 self.new_contact.get_or_insert_with(Default::default);
                             }
-                        });
-                    });
+                        },
+                    );
                     if let Some(contact) = &mut self.new_contact {
                         let mut close = false;
                         egui::Frame::group(ui.style())
@@ -561,7 +576,12 @@ impl eframe::App for Drafts {
                     return;
                 }
                 if self.page == Page::Archive {
-                    ui.heading(t("Archives Facture.net", "Facture.net archive"));
+                    crate::brand::page_header(
+                        ui,
+                        t("Archives", "Archive"),
+                        t("Historique importé de Facture.net, en lecture seule", "History imported from Facture.net, read only"),
+                        |_| {},
+                    );
                     ui.add(
                         crate::brand::field(&mut self.archive_query)
                             .hint_text(t("Rechercher", "Search")),
@@ -592,31 +612,21 @@ impl eframe::App for Drafts {
                     });
                     return;
                 }
-                ui.add_space(16.0);
-                ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new(if self.page == Page::Invoices {
-                            t("Factures", "Invoices")
-                        } else {
-                            t("Devis", "Quotes")
-                        })
-                        .size(36.0)
-                        .strong(),
-                    );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let subtitle = if self.live_since.is_some() {
+                    t("Brouillons et documents émis", "Drafts and issued documents")
+                } else {
+                    t("Brouillons et documents de démonstration", "Drafts and demonstration documents")
+                };
+                let page_title = if self.page == Page::Invoices { t("Factures", "Invoices") } else { t("Devis", "Quotes") };
+                crate::brand::page_header(ui, page_title, subtitle, |ui| {
                         if ui
                             .add_enabled(
                                 !self.composing,
-                                egui::Button::new(
-                                    egui::RichText::new(if self.page == Page::Invoices {
-                                        t("+ Nouvelle facture", "+ New invoice")
-                                    } else {
-                                        t("+ Nouveau devis", "+ New quote")
-                                    })
-                                    .color(egui::Color32::WHITE)
-                                    .strong(),
-                                )
-                                .fill(PLUM),
+                                crate::brand::primary(if self.page == Page::Invoices {
+                                    t("+ Nouvelle facture", "+ New invoice")
+                                } else {
+                                    t("+ Nouveau devis", "+ New quote")
+                                }),
                             )
                             .clicked()
                         {
@@ -651,14 +661,7 @@ impl eframe::App for Drafts {
                             self.error = None;
                             self.composing = true;
                         }
-                    });
                 });
-                ui.weak(if self.live_since.is_some() {
-                    t("Brouillons et documents émis", "Drafts and issued documents")
-                } else {
-                    t("Brouillons et documents de démonstration", "Drafts and demonstration documents")
-                });
-                ui.add_space(12.0);
 
                 if self.composing {
                     egui::ScrollArea::vertical()
@@ -761,18 +764,15 @@ impl eframe::App for Drafts {
                                         }
                                     }
                                     ui.separator();
-                                    ui.heading(t("Prestations", "Line items"));
-                                    egui::ScrollArea::vertical()
-                                        .id_salt("quote_lines")
-                                        .max_height(230.0)
-                                        .show(ui, |ui| {
+                                    crate::brand::section(ui, t("Prestations", "Line items"));
+                                    ui.scope(|ui| {
                                             let mut remove = None;
                                             for (index, line) in
                                                 self.quote.lines.iter_mut().enumerate()
                                             {
                                                 ui.push_id(index, |ui| {
                                                     ui.label(t("Description : intitulé sur la première ligne, détail en dessous", "Description: title on the first line, details below"));
-                                                    ui.add(crate::brand::area(&mut line.description).desired_rows(3).desired_width(f32::INFINITY));
+                                                    ui.add(crate::brand::area(&mut line.description).desired_rows(6).desired_width(f32::INFINITY));
                                                     ui.horizontal(|ui| {
                                                         ui.label(t("Unité", "Unit"));
                                                         ui.add(crate::brand::field(&mut line.unit));
@@ -837,7 +837,7 @@ impl eframe::App for Drafts {
                                         }
                                     });
                                     ui.separator();
-                                    ui.heading(t("Conditions", "Terms"));
+                                    crate::brand::section(ui, t("Conditions", "Terms"));
                                     ui.horizontal(|ui| {
                                         ui.label(t("Remise globale %", "Overall discount %"));
                                         ui.add(crate::brand::field(&mut self.quote.global_discount));
@@ -853,8 +853,18 @@ impl eframe::App for Drafts {
                                             ui.end_row();
                                         }
                                     });
-                                    ui.label(t("Mentions complémentaires", "Additional notes"));
-                                    ui.add(crate::brand::area(&mut self.quote.terms));
+                                    ui.label(t("Conditions particulières (page Conditions du PDF)", "Specific conditions (Terms page of the PDF)"));
+                                    ui.add(crate::brand::area(&mut self.quote.terms).desired_rows(10).desired_width(f32::INFINITY));
+                                    ui.collapsing(t("Conditions générales de vente de ce document", "General terms of sale for this document"), |ui| {
+                                        ui.horizontal(|ui| {
+                                            ui.weak(t("Reprises des Paramètres à la création du document, modifiables ici sans toucher au modèle.", "Copied from Settings when the document is created; editing here leaves the template unchanged."));
+                                            if ui.button(t("Recharger le modèle", "Reload template")).clicked() {
+                                                self.quote.cgv = self.store.issuer().map(|issuer| issuer.cgv).unwrap_or_default();
+                                            }
+                                        });
+                                        ui.add(crate::brand::area(&mut self.quote.cgv).desired_rows(14).desired_width(f32::INFINITY));
+                                    });
+                                    ui.weak(t("Mise en forme : **gras**, « # » en début de ligne pour un intertitre, ligne vide pour un nouveau paragraphe. Valable dans les descriptions, les conditions et les CGV.", "Formatting: **bold**, “# ” at line start for a subheading, blank line for a new paragraph. Works in descriptions, conditions and terms of sale."));
                                     ui.horizontal_wrapped(|ui| {
                                         if ui
                                             .button(t("Enregistrer le brouillon", "Save draft"))
@@ -964,7 +974,7 @@ impl eframe::App for Drafts {
                         .corner_radius(12)
                         .show(ui, |ui| {
                             ui.set_min_width(ui.available_width());
-                            ui.heading(t("Créez votre premier devis", "Create your first quote"));
+                            crate::brand::card_title(ui, t("Créez votre premier devis", "Create your first quote"));
                             ui.label(t(
                                 "Choisissez le titre, la devise et la langue du document.",
                                 "Choose a title, currency, and document language.",
@@ -1113,7 +1123,7 @@ impl eframe::App for Drafts {
                     if state.number.is_none() {
                         if live {
                             let next = self.next_numbers.iter().find(|(kind, _)| *kind == state.kind).map(|(_, n)| n.as_str()).unwrap_or("");
-                            ui.colored_label(PLUM, format!("{} {next}. {}", t("La finalisation attribuera le numéro", "Finalizing will assign number"), t("Le document deviendra définitif et non modifiable.", "The document becomes final and can no longer be edited.")));
+                            ui.colored_label(accent(), format!("{} {next}. {}", t("La finalisation attribuera le numéro", "Finalizing will assign number"), t("Le document deviendra définitif et non modifiable.", "The document becomes final and can no longer be edited.")));
                         } else {
                             ui.label(t("Numérotation réelle désactivée : la finalisation produit une démonstration numérotée TEST. Activez-la dans Paramètres.", "Real numbering is off: finalizing produces a TEST-numbered demonstration. Enable it in Settings."));
                         }
@@ -1221,29 +1231,21 @@ impl Drafts {
             payment_terms: issuer.payment_terms,
             payment_method: issuer.payment_method,
             valid_until: issuer.quote_validity,
+            cgv: issuer.cgv,
             ..Default::default()
         }
     }
 
     fn products_page(&mut self, ui: &mut egui::Ui, fr: bool) {
         let t = |f, e| if fr { f } else { e };
-        ui.horizontal(|ui| {
-            ui.vertical(|ui| {
-                ui.label(
-                    egui::RichText::new(t("Produits & services", "Products & services"))
-                        .size(30.0)
-                        .strong()
-                        .color(INK),
-                );
-                ui.label(
-                    egui::RichText::new(t(
-                        "Prestations réutilisables à ajouter en un clic dans vos devis et factures",
-                        "Reusable items to add to quotes and invoices in one click",
-                    ))
-                    .color(crate::brand::MUTED),
-                );
-            });
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        crate::brand::page_header(
+            ui,
+            t("Produits & services", "Products & services"),
+            t(
+                "Prestations réutilisables à ajouter en un clic dans vos devis et factures",
+                "Reusable items to add to quotes and invoices in one click",
+            ),
+            |ui| {
                 if ui
                     .add(crate::brand::primary(t(
                         "+ Nouveau produit",
@@ -1257,9 +1259,8 @@ impl Drafts {
                     });
                     self.error = None;
                 }
-            });
-        });
-        ui.add_space(12.0);
+            },
+        );
         if let Some(product) = &mut self.product_edit {
             let mut close = false;
             crate::brand::card(ui, |ui| {
@@ -1346,7 +1347,10 @@ impl Drafts {
         if self.products.is_empty() && self.product_edit.is_none() {
             crate::brand::card(ui, |ui| {
                 ui.set_min_width(ui.available_width());
-                ui.heading(t("Votre catalogue est vide", "Your catalogue is empty"));
+                crate::brand::card_title(
+                    ui,
+                    t("Votre catalogue est vide", "Your catalogue is empty"),
+                );
                 ui.label(t("Enregistrez une prestation que vous facturez souvent : nom, prix, unité et TVA. Elle sera recopiée dans le document, qui restera inchangé si vous modifiez le catalogue.", "Save an item you often bill: name, price, unit and tax. It is copied into the document, which stays unchanged if you edit the catalogue."));
             });
         }
@@ -1403,7 +1407,7 @@ impl Drafts {
                                         ))
                                         .size(16.0)
                                         .strong()
-                                        .color(PLUM),
+                                        .color(accent()),
                                     );
                                 },
                             );
@@ -1421,9 +1425,106 @@ impl Drafts {
         }
     }
 
+    fn apply_theme(&mut self, ctx: &egui::Context, id: &str) {
+        crate::brand::set_theme(id);
+        crate::brand::apply_style(ctx);
+        let image = crate::brand::tint_logo(&self.logo_source);
+        let (width, height) = image.dimensions();
+        self.logo = ctx.load_texture(
+            "facturecraft-mark",
+            egui::ColorImage::from_rgba_unmultiplied([width as usize, height as usize], &image),
+            egui::TextureOptions::LINEAR,
+        );
+        ctx.send_viewport_cmd(egui::ViewportCommand::Icon(Some(std::sync::Arc::new(
+            egui::IconData {
+                rgba: image.into_raw(),
+                width,
+                height,
+            },
+        ))));
+        if let Err(error) = self.store.set_preference("ui.theme", id) {
+            self.error = Some(error.to_string());
+        }
+    }
+
+    fn appearance_settings(&mut self, ui: &mut egui::Ui, fr: bool) {
+        let t = |f, e| if fr { f } else { e };
+        crate::brand::section(ui, t("Apparence", "Appearance"));
+        crate::brand::card(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.label(t(
+                "Couleur de l’interface et de l’icône",
+                "Interface and icon colour",
+            ));
+            let mut chosen = None;
+            ui.horizontal_wrapped(|ui| {
+                for theme in &crate::brand::THEMES {
+                    let selected = crate::brand::theme().id == theme.id;
+                    let (rect, response) =
+                        ui.allocate_exact_size(egui::vec2(86.0, 70.0), egui::Sense::click());
+                    let name = if fr { theme.fr } else { theme.en };
+                    response.widget_info(|| {
+                        egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, name)
+                    });
+                    let painter = ui.painter();
+                    if selected || response.hovered() {
+                        painter.rect_filled(
+                            rect,
+                            14.0,
+                            egui::Color32::from_white_alpha(if selected { 230 } else { 140 }),
+                        );
+                    }
+                    let center = egui::pos2(rect.center().x, rect.top() + 24.0);
+                    painter.circle_filled(center, 15.0, crate::brand::swatch(theme));
+                    if selected {
+                        painter.circle_stroke(
+                            center,
+                            19.0,
+                            egui::Stroke::new(2.0, crate::brand::swatch(theme)),
+                        );
+                    }
+                    painter.text(
+                        egui::pos2(rect.center().x, rect.bottom() - 13.0),
+                        egui::Align2::CENTER_CENTER,
+                        name,
+                        egui::FontId::proportional(13.0),
+                        INK,
+                    );
+                    if response
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .clicked()
+                        && !selected
+                    {
+                        chosen = Some(theme.id);
+                    }
+                }
+            });
+            if let Some(id) = chosen {
+                self.apply_theme(ui.ctx(), id);
+            }
+            ui.add_space(4.0);
+            if ui
+                .checkbox(
+                    &mut self.page_turn,
+                    t(
+                        "Animation de page tournée entre les vues",
+                        "Page-turn animation between views",
+                    ),
+                )
+                .changed()
+                && let Err(error) = self
+                    .store
+                    .set_preference("ui.page_turn", if self.page_turn { "on" } else { "off" })
+            {
+                self.error = Some(error.to_string());
+            }
+        });
+        ui.add_space(12.0);
+    }
+
     fn issuer_settings(&mut self, ui: &mut egui::Ui, fr: bool) {
         let t = |f, e| if fr { f } else { e };
-        ui.heading(t("Identité de l’émetteur", "Issuer details"));
+        crate::brand::section(ui, t("Identité de l’émetteur", "Issuer details"));
         ui.label(t("Ces informations figurent sur vos devis et factures. Elles sont figées dans chaque document au moment de sa finalisation.", "These details appear on your quotes and invoices and are frozen into each document when it is finalized."));
         crate::brand::card(ui, |ui| {
             ui.set_min_width(ui.available_width());
@@ -1528,7 +1629,7 @@ impl Drafts {
                 });
         });
         ui.add_space(12.0);
-        ui.heading(t("Conditions par défaut", "Default conditions"));
+        crate::brand::section(ui, t("Conditions par défaut", "Default conditions"));
         crate::brand::card(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.weak(t(
@@ -1593,7 +1694,7 @@ impl Drafts {
 
     fn numbering_settings(&mut self, ui: &mut egui::Ui, fr: bool) {
         let t = |f, e| if fr { f } else { e };
-        ui.heading(t("Numérotation et émission", "Numbering and issuance"));
+        crate::brand::section(ui, t("Numérotation et émission", "Numbering and issuance"));
         crate::brand::card(ui, |ui| {
             ui.set_min_width(ui.available_width());
             let names = |kind: &str| match kind {
@@ -1634,7 +1735,7 @@ impl Drafts {
                 .show(ui, |ui| {
                     for (kind, number) in &self.next_numbers {
                         ui.label(names(kind));
-                        ui.label(egui::RichText::new(number).strong().color(PLUM));
+                        ui.label(egui::RichText::new(number).strong().color(accent()));
                         ui.end_row();
                     }
                 });

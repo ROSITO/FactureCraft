@@ -20,6 +20,9 @@ pub struct Quote {
     pub payment_terms: String,
     #[serde(default)]
     pub payment_method: String,
+    /// General terms of sale for this document, copied from the issuer's defaults.
+    #[serde(default)]
+    pub cgv: String,
     #[serde(default)]
     pub valid_until: String,
     #[serde(default)]

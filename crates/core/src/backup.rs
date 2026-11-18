@@ -17,11 +17,11 @@ pub fn restore_snapshot(source: &Path, destination: &Path) -> Result<()> {
     ensure!(status == "ok", "Snapshot failed SQLite integrity check");
     let tables: i64 = connection.query_row(
         "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN
-         ('drafts', 'quote_details', 'contacts')",
+         ('drafts', 'quote_details', 'contacts', 'billing')",
         [],
         |row| row.get(0),
     )?;
-    ensure!(tables == 3, "Snapshot is missing FactureCraft tables");
+    ensure!(tables == 4, "Snapshot is missing FactureCraft tables");
     snapshot(&connection, destination)
 }
 

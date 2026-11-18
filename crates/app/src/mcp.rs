@@ -117,6 +117,12 @@ fn tools() -> Value {
             true
         ),
         tool(
+            "list_products",
+            "List reusable products and services; copy their values into quote lines",
+            object(json!({}), &[]),
+            true
+        ),
+        tool(
             "search_parties",
             "Find local contacts by name",
             object(json!({"query":string}), &["query"]),
@@ -284,6 +290,12 @@ fn call(store: &Store, name: &str, args: &Value) -> Result<Value, RpcError> {
                 .and_then(|draft| Ok(serde_json::to_value(draft.context("Draft not found")?)?))
         }
         "get_document" => operations::document(store, positive(arguments::<DraftId>(args)?.id)?),
+        "list_products" => {
+            arguments::<Empty>(args)?;
+            store
+                .products()
+                .and_then(|products| Ok(serde_json::to_value(products)?))
+        }
         "search_parties" => {
             let query = arguments::<Search>(args)?.query.to_lowercase();
             store.contacts().map(|contacts| {

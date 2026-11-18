@@ -1,3 +1,5 @@
+mod brand;
+mod dashboard;
 mod mcp;
 mod operations;
 mod pdf;

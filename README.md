@@ -8,13 +8,15 @@ FactureCraft is a Rust desktop app for preparing quotes and invoices. The deskto
 
 ## Project status
 
-Sprints 1 to 4 are in place: contacts, quote lines with tax and discounts, PDF previews, Facture.net export import, quote-to-invoice conversion, deposits, payments and credit notes. Finalization currently assigns demonstration numbers (`TEST-…`); real numbering and issuance are part of sprint 5.
+Sprints 1 to 4 are in place: contacts, quote lines with tax and discounts, PDF previews, Facture.net export import, quote-to-invoice conversion, deposits, payments and credit notes. Sprint 5 adds real numbering: once enabled in Settings, finalization continues the imported Facture.net series (`F012700001`: prefix, month, year, yearly counter) and freezes a dated PDF. Until then, finalized documents get demonstration `TEST-…` numbers.
 
 | Interface | Current scope |
 | --- | --- |
-| Native desktop app | Edit documents with a live preview, finalize, mark quotes accepted, record payments |
+| Native desktop app | Dashboard, documents with a live preview, products and services catalogue, finalization, acceptance, payments |
 | `facturecraft` CLI | Prepare and update drafts, derive documents, preview PDFs, import, backup and restore |
-| `facturecraft mcp` | Search contacts, read documents, prepare drafts and PDF previews through a local stdio server |
+| `facturecraft mcp` | Search contacts and products, read documents, prepare drafts and PDF previews through a local stdio server |
+
+Finalization and numbering stay in the desktop app: neither the CLI nor MCP can issue a document.
 
 See the [usage guide](docs/utilisation.md) (French) for commands and MCP tools.
 

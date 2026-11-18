@@ -26,6 +26,7 @@ pub(crate) fn initialize(db: &Connection) -> Result<()> {
             invoice_id INTEGER NOT NULL REFERENCES billing(id), amount TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS issuer_profile(id INTEGER PRIMARY KEY CHECK(id=1), details TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS issuer_snapshot(document_id INTEGER PRIMARY KEY REFERENCES billing(id), details TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
         COMMIT;")?;
     Ok(())
 }
@@ -339,7 +340,7 @@ impl Store {
     pub fn finalize_document(
         &self,
         id: i64,
-        render: impl FnOnce(&Draft, &Quote, &str) -> Result<Vec<u8>>,
+        render: impl FnOnce(&Draft, &Quote, &str, &str) -> Result<Vec<u8>>,
     ) -> Result<String> {
         self.finalize(id, None, render)
     }
@@ -348,7 +349,7 @@ impl Store {
         &self,
         id: i64,
         expected_version: i64,
-        render: impl FnOnce(&Draft, &Quote, &str) -> Result<Vec<u8>>,
+        render: impl FnOnce(&Draft, &Quote, &str, &str) -> Result<Vec<u8>>,
     ) -> Result<String> {
         self.finalize(id, Some(expected_version), render)
     }
@@ -357,7 +358,7 @@ impl Store {
         &self,
         id: i64,
         expected: Option<i64>,
-        render: impl FnOnce(&Draft, &Quote, &str) -> Result<Vec<u8>>,
+        render: impl FnOnce(&Draft, &Quote, &str, &str) -> Result<Vec<u8>>,
     ) -> Result<String> {
         let tx = self.billing_transaction()?;
         let state = self.billing_state(id)?;
@@ -406,26 +407,148 @@ impl Store {
                 "Credits exceed invoiced amount"
             );
         }
-        let prefix = match state.kind.as_str() {
-            "quote" => "D",
-            "invoice" => "F",
-            "deposit" => "FA",
-            "credit" => "A",
-            _ => anyhow::bail!("Unknown document kind"),
+        let prefix = prefix(&state.kind)?;
+        let (month, year, issued_on): (String, String, String) = tx.query_row(
+            "SELECT strftime('%m','now','localtime'), strftime('%Y','now','localtime'), date('now','localtime')",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        let number = if self.live_numbering()?.is_some() {
+            let short_year = &year[2..];
+            // Continue the imported series: never reuse a counter already present in the archive.
+            let imported = self.archived_counter(prefix, short_year)?;
+            let next: i64 = tx.query_row(
+                "INSERT INTO billing_sequence(kind,last) VALUES(?1,?2+1)
+                ON CONFLICT(kind) DO UPDATE SET last=max(last,?2)+1 RETURNING last",
+                params![format!("{}:{year}", state.kind), imported],
+                |row| row.get(0),
+            )?;
+            ensure!(next <= 99_999, "Yearly counter exhausted");
+            format!("{prefix}{month}{short_year}{next:05}")
+        } else {
+            let next: i64 = tx.query_row("INSERT INTO billing_sequence(kind,last) VALUES(?1,1) ON CONFLICT(kind) DO UPDATE SET last=last+1 RETURNING last", [&state.kind], |row| row.get(0))?;
+            format!("TEST-{prefix}-{next:06}")
         };
-        let next:i64=tx.query_row("INSERT INTO billing_sequence(kind,last) VALUES(?1,1) ON CONFLICT(kind) DO UPDATE SET last=last+1 RETURNING last",[&state.kind],|row|row.get(0))?;
-        let number = format!("TEST-{prefix}-{next:06}");
+        ensure!(
+            !self.archived_number_exists(&number)?,
+            "Number {number} already exists in the imported archive"
+        );
         let issuer = serde_json::to_string(&self.issuer()?)?;
         tx.execute(
             "INSERT INTO issuer_snapshot(document_id,details) VALUES(?1,?2)",
             params![id, issuer],
         )?;
-        let pdf = render(&draft, &quote, &number)?;
+        let pdf = render(&draft, &quote, &number, &issued_on)?;
         ensure!(pdf.starts_with(b"%PDF-"), "Renderer did not return a PDF");
         tx.execute("UPDATE billing SET number=?1,pdf=?2,issued_at=CURRENT_TIMESTAMP,version=version+1 WHERE id=?3",params![number,pdf,id])?;
         tx.commit()?;
         Ok(number)
     }
+    /// Date from which finalization assigns legal numbers, if enabled.
+    pub fn live_numbering(&self) -> Result<Option<String>> {
+        Ok(self
+            .0
+            .query_row(
+                "SELECT value FROM settings WHERE key='live_numbering_since'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
+
+    /// Human decision: FactureCraft becomes the only issuer and continues the series.
+    pub fn enable_live_numbering(&self) -> Result<()> {
+        let issuer = self.issuer()?;
+        ensure!(
+            [&issuer.name, &issuer.address, &issuer.registration]
+                .iter()
+                .all(|field| !field.trim().is_empty()),
+            "Issuer name, address and registration number are required before real issuance"
+        );
+        self.0.execute(
+            "INSERT OR IGNORE INTO settings(key,value) VALUES('live_numbering_since',date('now','localtime'))",
+            [],
+        )?;
+        Ok(())
+    }
+
+    /// Allowed only while no legal number has been assigned.
+    pub fn disable_live_numbering(&self) -> Result<()> {
+        let tx = self.billing_transaction()?;
+        let issued: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM billing WHERE number IS NOT NULL AND number NOT LIKE 'TEST-%')",
+            [],
+            |row| row.get(0),
+        )?;
+        ensure!(!issued, "Real numbers have already been issued");
+        tx.execute("DELETE FROM settings WHERE key='live_numbering_since'", [])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Next legal number per document kind for this month, as finalization would assign it.
+    pub fn next_numbers(&self) -> Result<Vec<(String, String)>> {
+        let (month, year): (String, String) = self.0.query_row(
+            "SELECT strftime('%m','now','localtime'), strftime('%Y','now','localtime')",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let short_year = &year[2..];
+        let mut numbers = Vec::new();
+        for kind in ["quote", "invoice", "deposit", "credit"] {
+            let prefix = prefix(kind)?;
+            let local: i64 = self
+                .0
+                .query_row(
+                    "SELECT last FROM billing_sequence WHERE kind=?1",
+                    [format!("{kind}:{year}")],
+                    |row| row.get(0),
+                )
+                .optional()?
+                .unwrap_or(0);
+            let next = local.max(self.archived_counter(prefix, short_year)?) + 1;
+            numbers.push((kind.into(), format!("{prefix}{month}{short_year}{next:05}")));
+        }
+        Ok(numbers)
+    }
+
+    fn archive_numbers(&self) -> Result<Vec<String>> {
+        if !self.has_archive()? {
+            return Ok(Vec::new());
+        }
+        let mut query = self.0.prepare(
+            "SELECT json_extract(CAST(content AS TEXT),'$.uid') FROM facture_net_archive
+            WHERE category IN ('quotations','invoices')",
+        )?;
+        let rows = query.query_map([], |row| row.get::<_, Option<String>>(0))?;
+        Ok(rows
+            .filter_map(|row| row.transpose())
+            .collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub(crate) fn has_archive(&self) -> Result<bool> {
+        Ok(self.0.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='facture_net_archive')",
+            [],
+            |row| row.get(0),
+        )?)
+    }
+
+    fn archived_counter(&self, prefix: &str, short_year: &str) -> Result<i64> {
+        Ok(self
+            .archive_numbers()?
+            .iter()
+            .filter_map(|number| parse_number(number))
+            .filter(|(p, _, year, _)| *p == prefix && *year == short_year)
+            .map(|(_, _, _, counter)| counter)
+            .max()
+            .unwrap_or(0))
+    }
+
+    fn archived_number_exists(&self, number: &str) -> Result<bool> {
+        Ok(self.archive_numbers()?.iter().any(|n| n == number))
+    }
+
     pub fn finalized_pdf(&self, id: i64) -> Result<Vec<u8>> {
         self.0
             .query_row(
@@ -436,6 +559,30 @@ impl Store {
             .optional()?
             .context("Finalized PDF unavailable")
     }
+}
+
+fn prefix(kind: &str) -> Result<&'static str> {
+    Ok(match kind {
+        "quote" => "D",
+        "invoice" => "F",
+        "deposit" => "FA",
+        "credit" => "A",
+        _ => anyhow::bail!("Unknown document kind"),
+    })
+}
+
+/// Splits `<prefix><mm><yy><counter>` as used by Facture.net, e.g. `FA012600001`.
+fn parse_number(number: &str) -> Option<(&str, &str, &str, i64)> {
+    let split = number.find(|c: char| c.is_ascii_digit())?;
+    let (prefix, digits) = number.split_at(split);
+    (digits.len() >= 9 && digits.bytes().all(|b| b.is_ascii_digit())).then(|| {
+        (
+            prefix,
+            &digits[..2],
+            &digits[2..4],
+            digits[4..].parse().unwrap_or(0),
+        )
+    })
 }
 
 #[cfg(test)]
@@ -453,7 +600,7 @@ mod tests {
             ..Default::default()
         }
     }
-    fn render(_: &Draft, _: &Quote, number: &str) -> Result<Vec<u8>> {
+    fn render(_: &Draft, _: &Quote, number: &str, _: &str) -> Result<Vec<u8>> {
         Ok(format!("%PDF-1.4 {number}").into_bytes())
     }
 
@@ -505,13 +652,13 @@ mod tests {
         );
         assert!(
             store
-                .finalize_document(quote.id, |_, _, _| anyhow::bail!("renderer failed"))
+                .finalize_document(quote.id, |_, _, _, _| anyhow::bail!("renderer failed"))
                 .is_err()
         );
         assert_eq!(store.finalize_document(quote.id, render)?, "TEST-D-000001");
         let pdf = store.finalized_pdf(quote.id)?;
         assert_eq!(
-            store.finalize_document(quote.id, |_, _, _| unreachable!())?,
+            store.finalize_document(quote.id, |_, _, _, _| unreachable!())?,
             "TEST-D-000001"
         );
         assert!(
@@ -555,5 +702,68 @@ mod tests {
         assert_eq!(store.billing_state(invoice.id)?.paid, "6000");
         assert_eq!(store.finalized_pdf(quote.id)?, pdf);
         Ok(())
+    }
+
+    #[test]
+    fn live_numbering_continues_the_imported_series() -> Result<()> {
+        let store = Store::open(std::path::Path::new(":memory:"))?;
+        let (month, year): (String, String) = store.0.query_row(
+            "SELECT strftime('%m','now','localtime'), substr(strftime('%Y','now','localtime'),3)",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        store.0.execute_batch(&format!(
+            "CREATE TABLE facture_net_archive (source TEXT, category TEXT, source_key TEXT, content BLOB, record_link TEXT);
+            INSERT INTO facture_net_archive VALUES
+              ('s','invoices','1',CAST('{{\"uid\":\"F01{year}00003\",\"type\":\"Facture\",\"createdAt\":1,\"pricePretax\":100.5}}' AS BLOB),NULL),
+              ('s','invoices','2',CAST('{{\"uid\":\"F019900042\"}}' AS BLOB),NULL);"
+        ))?;
+        let quote = store.save_quote(None, "Facture", "EUR", "fr", &example("200"))?;
+        store
+            .0
+            .execute("UPDATE billing SET kind='invoice' WHERE id=?1", [quote.id])?;
+        assert!(
+            store.enable_live_numbering().is_err(),
+            "issuer is incomplete"
+        );
+        store.save_issuer(&crate::issuer::Issuer {
+            name: "Émetteur".into(),
+            address: "Adresse".into(),
+            registration: "000".into(),
+            ..Default::default()
+        })?;
+        store.enable_live_numbering()?;
+        let expected = format!("F{month}{year}00004");
+        assert!(
+            store
+                .next_numbers()?
+                .contains(&("invoice".into(), expected.clone()))
+        );
+        let mut dated = String::new();
+        let number = store.finalize_document(quote.id, |_, _, number, date| {
+            dated = date.into();
+            render(&quote_draft(), &Quote::default(), number, date)
+        })?;
+        assert_eq!(number, expected);
+        assert_eq!(dated.len(), 10);
+        assert!(
+            store.disable_live_numbering().is_err(),
+            "a legal number exists"
+        );
+        let board = store.dashboard(dated[..4].parse()?, "eur")?;
+        assert_eq!(board.invoices, 1);
+        assert_eq!(board.revenue_year, "200.00");
+        assert_eq!(board.outstanding, "200.00");
+        assert_eq!(board.activity[0].number, expected);
+        Ok(())
+    }
+
+    fn quote_draft() -> Draft {
+        Draft {
+            id: 0,
+            title: String::new(),
+            currency: "EUR".into(),
+            language: "fr".into(),
+        }
     }
 }

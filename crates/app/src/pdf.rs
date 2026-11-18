@@ -39,6 +39,8 @@ pub fn draft_label(kind: &str, language: &str) -> String {
 pub struct DocumentContext<'a> {
     pub issuer: Option<&'a facturecraft_core::issuer::Issuer>,
     pub applied_deposit: Option<(&'a str, &'a str)>,
+    /// Issue date `YYYY-MM-DD`, printed on finalized documents.
+    pub issued_on: Option<&'a str>,
 }
 
 pub fn render(
@@ -78,6 +80,18 @@ pub fn render(
     document.push(
         Paragraph::default().styled_string(title, Style::new().with_font_size(22).with_color(PLUM)),
     );
+    if let Some(date) = context.issued_on.filter(|date| date.len() == 10) {
+        document.push(Paragraph::new(if fr {
+            format!(
+                "Date d’émission : {}/{}/{}",
+                &date[8..],
+                &date[5..7],
+                &date[..4]
+            )
+        } else {
+            format!("Issue date: {date}")
+        }));
+    }
     document.push(Break::new(1.0));
     if let Some(issuer) = context
         .issuer
@@ -256,7 +270,10 @@ mod tests {
             "EUR",
             "fr",
             &quote,
-            DocumentContext::default(),
+            DocumentContext {
+                issued_on: Some("2026-11-18"),
+                ..Default::default()
+            },
         )
         .unwrap();
         assert!(bytes.starts_with(b"%PDF-"));

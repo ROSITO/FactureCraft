@@ -39,6 +39,7 @@ impl Store {
         ); CREATE TABLE IF NOT EXISTS quote_details (draft_id INTEGER PRIMARY KEY, details TEXT NOT NULL); CREATE TABLE IF NOT EXISTS contacts (name TEXT NOT NULL, email TEXT NOT NULL, address TEXT NOT NULL, UNIQUE(name,email,address));",
         )?;
         billing::initialize(&conn)?;
+        products::initialize(&conn)?;
         Ok(Self(conn))
     }
 
@@ -111,3 +112,7 @@ mod idempotency;
 pub mod backup;
 
 pub mod issuer;
+
+pub mod products;
+
+pub mod dashboard;

@@ -40,6 +40,7 @@ pub fn render_draft(store: &Store, id: i64) -> Result<Vec<u8>> {
             issuer: Some(&issuer),
             applied_deposit: (billing.kind == "invoice")
                 .then_some((&billing.deposits, &billing.outstanding)),
+            ..Default::default()
         },
     )
 }

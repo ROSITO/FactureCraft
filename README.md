@@ -18,7 +18,7 @@ Sprints 1 to 4 are in place: contacts, quote lines with tax and discounts, PDF p
 
 Finalization and numbering stay in the desktop app: neither the CLI nor MCP can issue a document.
 
-See the [usage guide](docs/utilisation.md) (French) for commands and MCP tools.
+New to FactureCraft? Start with the [user guide](docs/guide-utilisateur.md) (French): settings, quotes, invoices, payments, Factur-X and backups, step by step. The [usage notes](docs/utilisation.md) (French) cover the command line and MCP tools.
 
 ## Run from source
 

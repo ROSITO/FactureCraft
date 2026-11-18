@@ -1,0 +1,17 @@
+[package]
+name = "facturecraft"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive", "env"] }
+eframe = "0.33"
+image = { version = "0.25", default-features = false, features = ["png"] }
+serde_json = "1"
+facturecraft-core = { path = "../core" }
+craft-mcp = { git = "https://github.com/storytold/craft-libs", rev = "7a7a18cb40ac4cd5fca29c0dc224ac5178d40a89" }
+craft-jsonrpc = { git = "https://github.com/storytold/craft-libs", rev = "7a7a18cb40ac4cd5fca29c0dc224ac5178d40a89" }
+
+[dev-dependencies]
+tempfile = "3"

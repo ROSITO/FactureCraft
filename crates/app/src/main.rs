@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use facturecraft_core::{Store, default_db};
 use std::path::PathBuf;
 
-#[derive(Clone, Copy, ValueEnum)]
+#[derive(Clone, Copy, PartialEq, ValueEnum)]
 enum Language {
     Fr,
     En,

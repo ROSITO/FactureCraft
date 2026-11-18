@@ -43,6 +43,12 @@ Par défaut, la finalisation produit des documents de démonstration numérotés
 
 Les numéros reprennent le format de Facture.net : préfixe (`D` devis, `F` facture, `FA` acompte, `A` avoir), mois, année sur deux chiffres, compteur annuel à cinq chiffres, par exemple `F012700001`. La série continue après le dernier numéro importé de l’année et repart à `00001` chaque année. Un numéro déjà présent dans l’archive n’est jamais attribué. Le PDF figé porte la date d’émission. Le retour au mode démonstration reste possible tant qu’aucun numéro réel n’a été attribué.
 
+## Logo, émetteur et mise en page des PDF
+
+Dans Paramètres, « Choisir un logo… » accepte un PNG ou un JPEG. L’image est réduite à 600 pixels au plus et s’affiche en haut à droite des documents. Les champs de l’émetteur (société, contact, adresse, pays, SIREN, TVA, téléphone, e-mail) alimentent le bloc Émetteur. Les conditions de règlement, le mode de règlement et la validité du devis sont repris dans chaque nouveau document, puis modifiables document par document. Les conditions générales de vente s’impriment sur une page dédiée des devis.
+
+Le PDF suit cette organisation : titre et date, émetteur et destinataire côte à côte, tableau des prestations (intitulé sur la première ligne de la description, détail en dessous), mentions d’exonération et totaux, puis une page Conditions et une page Conditions générales de vente. Un brouillon porte la date du jour ; un document finalisé porte sa date d’émission.
+
 ## Utiliser MCP dans Codex ou Hermes
 
 Déclarer un serveur local stdio avec le chemin absolu du binaire installé comme commande et `mcp` comme argument. Pour choisir une base dédiée, ajouter `--db`, suivi de son chemin absolu, avant `mcp`. La liste des outils publiée par le serveur fournit les schémas d’entrée.

@@ -3,7 +3,7 @@ use anyhow::Result;
 use eframe::egui;
 use facturecraft_core::{Draft, Store};
 
-use crate::brand::{AMBER, CREAM, DEEP_PLUM, INK, LILAC, PLUM, Tone};
+use crate::brand::{AMBER, CREAM, INK, PLUM, Tone};
 use facturecraft_core::{billing::BillingState, products::Product};
 
 pub fn run(store: Store, language: Language) -> Result<()> {
@@ -45,17 +45,7 @@ pub fn run(store: Store, language: Language) -> Result<()> {
                 mark,
                 egui::TextureOptions::LINEAR,
             );
-            let mut visuals = egui::Visuals::light();
-            visuals.panel_fill = CREAM;
-            visuals.selection.bg_fill = LILAC;
-            // Input fields stay visible on white cards.
-            visuals.extreme_bg_color = egui::Color32::from_rgb(250, 246, 250);
-            visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, crate::brand::BORDER);
-            creation.egui_ctx.set_visuals(visuals);
-            creation.egui_ctx.style_mut(|style| {
-                style.spacing.item_spacing = egui::vec2(10.0, 10.0);
-                style.spacing.button_padding = egui::vec2(14.0, 8.0);
-            });
+            crate::brand::apply_style(&creation.egui_ctx);
             let mut app = Drafts {
                 store,
                 logo,
@@ -95,6 +85,9 @@ pub fn run(store: Store, language: Language) -> Result<()> {
                 live_since: None,
                 next_numbers: Vec::new(),
                 confirm_live: false,
+                logo_texture: None,
+                shown_page: Page::Dashboard,
+                shown_at: 0.0,
             };
             app.refresh();
             Ok(Box::new(app))
@@ -153,6 +146,11 @@ struct Drafts {
     live_since: Option<String>,
     next_numbers: Vec<(String, String)>,
     confirm_live: bool,
+    /// Logo preview; `None` inside means no logo, outer `None` means not loaded yet.
+    logo_texture: Option<Option<egui::TextureHandle>>,
+    /// Page shown last frame and when it appeared, for the fade-in.
+    shown_page: Page,
+    shown_at: f64,
 }
 
 /// Localized status of a document, coloured like the brand kit badges.
@@ -321,13 +319,29 @@ impl eframe::App for Drafts {
         }
         let fr = matches!(self.language, Language::Fr);
         let t = |f, e| if fr { f } else { e };
+        crate::brand::paint_background(ctx);
+        let now = ctx.input(|input| input.time);
+        if self.shown_page != self.page {
+            self.shown_page = self.page;
+            self.shown_at = now;
+        }
         egui::SidePanel::left("navigation")
-            .exact_width(222.0)
+            .exact_width(246.0)
             .resizable(false)
+            .show_separator_line(false)
             .frame(
-                egui::Frame::side_top_panel(&ctx.style())
-                    .fill(DEEP_PLUM)
-                    .inner_margin(18),
+                egui::Frame::new()
+                    .fill(egui::Color32::from_rgba_unmultiplied(58, 22, 64, 242))
+                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_white_alpha(28)))
+                    .corner_radius(26)
+                    .outer_margin(12)
+                    .inner_margin(16)
+                    .shadow(egui::Shadow {
+                        offset: [0, 10],
+                        blur: 30,
+                        spread: 0,
+                        color: egui::Color32::from_rgba_unmultiplied(58, 22, 64, 70),
+                    }),
             )
             .show(ctx, |ui| {
                 ui.add_space(8.0);
@@ -341,28 +355,39 @@ impl eframe::App for Drafts {
                 let (line, _) = ui.allocate_exact_size(egui::vec2(38.0, 3.0), egui::Sense::hover());
                 ui.painter().rect_filled(line, 2.0, AMBER);
                 ui.add_space(17.0);
-                for (page, label) in [
-                    (Page::Dashboard, t("📊  Tableau de bord", "📊  Dashboard")),
-                    (Page::Quotes, t("🗋  Devis", "🗋  Quotes")),
-                    (Page::Invoices, t("🗐  Factures", "🗐  Invoices")),
-                    (Page::Clients, t("👤  Clients", "👤  Clients")),
+                let pages = [
+                    Page::Dashboard,
+                    Page::Quotes,
+                    Page::Invoices,
+                    Page::Clients,
+                    Page::Products,
+                    Page::Archive,
+                    Page::Settings,
+                ];
+                if let Some(index) = pages.iter().position(|page| *page == self.page) {
+                    let step = 40.0 + ui.spacing().item_spacing.y;
+                    let start = ui.cursor().min + egui::vec2(0.0, step * index as f32);
+                    crate::brand::nav_indicator(
+                        ui,
+                        egui::Rect::from_min_size(start, egui::vec2(ui.available_width(), 40.0)),
+                    );
+                }
+                for (page, icon, label) in [
+                    (Page::Dashboard, "📊", t("Tableau de bord", "Dashboard")),
+                    (Page::Quotes, "🗋", t("Devis", "Quotes")),
+                    (Page::Invoices, "🗐", t("Factures", "Invoices")),
+                    (Page::Clients, "👤", t("Clients", "Clients")),
                     (
                         Page::Products,
-                        t("📦  Produits & services", "📦  Products & services"),
+                        "📦",
+                        t("Produits & services", "Products & services"),
                     ),
-                    (Page::Archive, t("🗄  Archives", "🗄  Archive")),
-                    (Page::Settings, t("⚙  Paramètres", "⚙  Settings")),
+                    (Page::Archive, "🗄", t("Archives", "Archive")),
+                    (Page::Settings, "⚙", t("Paramètres", "Settings")),
                 ] {
                     if ui
                         .add_enabled_ui(!self.composing, |ui| {
-                            ui.add_sized(
-                                [186.0, 38.0],
-                                egui::Button::new(egui::RichText::new(label).color(CREAM))
-                                    .wrap_mode(egui::TextWrapMode::Truncate)
-                                    .fill(if self.page == page { PLUM } else { DEEP_PLUM })
-                                    .stroke(egui::Stroke::NONE)
-                                    .corner_radius(8),
-                            )
+                            crate::brand::nav_item(ui, icon, label, self.page == page)
                         })
                         .inner
                         .clicked()
@@ -385,11 +410,26 @@ impl eframe::App for Drafts {
             egui::SidePanel::right("quote_preview")
                 .default_width(340.0)
                 .min_width(300.0)
+                .show_separator_line(false)
+                .frame(
+                    egui::Frame::new()
+                        .fill(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 150))
+                        .corner_radius(22)
+                        .outer_margin(12)
+                        .inner_margin(16),
+                )
                 .show(ctx, |ui| self.preview(ui));
         }
         egui::CentralPanel::default()
-            .frame(egui::Frame::central_panel(&ctx.style()).inner_margin(28))
+            .frame(egui::Frame::new().inner_margin(egui::Margin { left: 18, right: 28, top: 28, bottom: 20 }))
             .show(ctx, |ui| {
+                let appear = ((now - self.shown_at) / 0.22).clamp(0.0, 1.0) as f32;
+                if appear < 1.0 {
+                    ctx.request_repaint();
+                }
+                let eased = 1.0 - (1.0 - appear).powi(3);
+                ui.set_opacity(eased);
+                ui.add_space((1.0 - eased) * 12.0);
                 if self.page == Page::Dashboard {
                     if let Some(error) = &self.error {
                         ui.colored_label(ui.visuals().error_fg_color, error);
@@ -421,17 +461,7 @@ impl eframe::App for Drafts {
                     egui::ScrollArea::vertical().id_salt("settings").show(ui, |ui| {
                         if let Some(notice) = &self.notice { ui.label(notice); }
                         if let Some(error) = &self.error { ui.colored_label(ui.visuals().error_fg_color, error); }
-                        ui.heading(t("Identité de l’émetteur", "Issuer details"));
-                        ui.label(t("Ces informations figurent sur les documents finalisés. Elles sont figées dans chaque document au moment de sa finalisation.", "These details appear on finalized documents and are frozen into each document when it is finalized."));
-                        for (label, field) in [
-                            (t("Nom ou société", "Name or company"), &mut self.issuer.name),
-                            (t("Adresse", "Address"), &mut self.issuer.address),
-                            (t("E-mail", "Email"), &mut self.issuer.email),
-                            (t("Identifiant d’immatriculation", "Registration number"), &mut self.issuer.registration),
-                            (t("Numéro de TVA", "VAT number"), &mut self.issuer.vat_id),
-                            (t("Conditions par défaut", "Default terms"), &mut self.issuer.terms),
-                        ] { ui.label(label); ui.add(egui::TextEdit::singleline(field).desired_width(f32::INFINITY)); }
-                        if ui.button(t("Enregistrer les paramètres", "Save settings")).clicked() { match self.store.save_issuer(&self.issuer) { Ok(()) => { self.notice = Some(t("Paramètres enregistrés.", "Settings saved.").into()); self.error = None; }, Err(error) => self.error = Some(error.to_string()) } }
+                        self.issuer_settings(ui, fr);
                         ui.add_space(18.0);
                         self.numbering_settings(ui, fr);
                     });
@@ -466,7 +496,7 @@ impl eframe::App for Drafts {
                                     (t("Adresse", "Address"), &mut contact.address),
                                 ] {
                                     ui.label(label);
-                                    ui.text_edit_singleline(field);
+                                    ui.add(crate::brand::field(field));
                                 }
                                 ui.horizontal(|ui| {
                                     if ui
@@ -492,7 +522,7 @@ impl eframe::App for Drafts {
                         ui.colored_label(ui.visuals().error_fg_color, error);
                     }
                     ui.add(
-                        egui::TextEdit::singleline(&mut self.contact_query).hint_text(t(
+                        crate::brand::field(&mut self.contact_query).hint_text(t(
                             "Rechercher un client ou une société",
                             "Search clients or companies",
                         )),
@@ -533,7 +563,7 @@ impl eframe::App for Drafts {
                 if self.page == Page::Archive {
                     ui.heading(t("Archives Facture.net", "Facture.net archive"));
                     ui.add(
-                        egui::TextEdit::singleline(&mut self.archive_query)
+                        crate::brand::field(&mut self.archive_query)
                             .hint_text(t("Rechercher", "Search")),
                     );
                     if let Some(error) = &self.error {
@@ -615,8 +645,7 @@ impl eframe::App for Drafts {
                                     }
                                 }
                             }
-                            self.quote = Default::default();
-                            if let Ok(issuer) = self.store.issuer() { self.quote.terms = issuer.terms; }
+                            self.quote = self.new_quote();
                             self.currency = "EUR".into();
                             self.document_language = self.language;
                             self.error = None;
@@ -640,13 +669,13 @@ impl eframe::App for Drafts {
                                 .show(ui, |ui| {
                                     ui.label(t("Titre du devis", "Quote title"));
                                     ui.add(
-                                        egui::TextEdit::singleline(&mut self.title)
+                                        crate::brand::field(&mut self.title)
                                             .desired_width(f32::INFINITY),
                                     );
                                     ui.horizontal_wrapped(|ui| {
                                         ui.label(t("Devise", "Currency"));
                                         ui.add(
-                                            egui::TextEdit::singleline(&mut self.currency)
+                                            crate::brand::field(&mut self.currency)
                                                 .desired_width(56.0)
                                                 .char_limit(3),
                                         );
@@ -692,28 +721,29 @@ impl eframe::App for Drafts {
                                                     self.quote
                                                         .recipient_address
                                                         .clone_from(&contact.address);
+                                                    self.quote
+                                                        .recipient_country
+                                                        .clone_from(&contact.country);
+                                                    self.quote
+                                                        .recipient_registration
+                                                        .clone_from(&contact.registration);
                                                 }
                                             }
                                         });
-                                    for (label, field) in [
-                                        (
-                                            t("Nom ou société", "Name or company"),
-                                            &mut self.quote.recipient,
-                                        ),
-                                        (t("E-mail", "Email"), &mut self.quote.recipient_email),
-                                        (
-                                            t("Adresse", "Address"),
-                                            &mut self.quote.recipient_address,
-                                        ),
-                                    ] {
-                                        ui.horizontal(|ui| {
+                                    egui::Grid::new("recipient_fields").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
+                                        for (label, field, rows) in [
+                                            (t("Nom ou société", "Name or company"), &mut self.quote.recipient, 1),
+                                            (t("Adresse", "Address"), &mut self.quote.recipient_address, 2),
+                                            (t("Pays", "Country"), &mut self.quote.recipient_country, 1),
+                                            (t("N° d’entreprise", "Company number"), &mut self.quote.recipient_registration, 1),
+                                            (t("E-mail", "Email"), &mut self.quote.recipient_email, 1),
+                                        ] {
                                             ui.label(label);
-                                            ui.add(
-                                                egui::TextEdit::singleline(field)
-                                                    .desired_width(ui.available_width()),
-                                            );
-                                        });
-                                    }
+                                            let edit = if rows > 1 { crate::brand::area(field).desired_rows(rows) } else { crate::brand::field(field) };
+                                            ui.add(edit.desired_width(ui.available_width()));
+                                            ui.end_row();
+                                        }
+                                    });
                                     if ui
                                         .button(t("Ajouter au carnet", "Save to contacts"))
                                         .clicked()
@@ -722,6 +752,8 @@ impl eframe::App for Drafts {
                                             name: self.quote.recipient.clone(),
                                             email: self.quote.recipient_email.clone(),
                                             address: self.quote.recipient_address.clone(),
+                                            country: self.quote.recipient_country.clone(),
+                                            registration: self.quote.recipient_registration.clone(),
                                         };
                                         match self.store.save_contact(&contact) {
                                             Ok(()) => self.refresh(),
@@ -739,20 +771,20 @@ impl eframe::App for Drafts {
                                                 self.quote.lines.iter_mut().enumerate()
                                             {
                                                 ui.push_id(index, |ui| {
-                                                    ui.label(t("Description", "Description"));
-                                                    ui.text_edit_singleline(&mut line.description);
+                                                    ui.label(t("Description : intitulé sur la première ligne, détail en dessous", "Description: title on the first line, details below"));
+                                                    ui.add(crate::brand::area(&mut line.description).desired_rows(3).desired_width(f32::INFINITY));
                                                     ui.horizontal(|ui| {
                                                         ui.label(t("Unité", "Unit"));
-                                                        ui.text_edit_singleline(&mut line.unit);
+                                                        ui.add(crate::brand::field(&mut line.unit));
                                                     });
                                                     ui.horizontal(|ui| {
                                                         ui.label(t(
                                                             "Motif d’exonération",
                                                             "Tax exemption reason",
                                                         ));
-                                                        ui.text_edit_singleline(
+                                                        ui.add(crate::brand::field(
                                                             &mut line.exemption_reason,
-                                                        );
+                                                        ));
                                                     });
                                                     ui.horizontal_wrapped(|ui| {
                                                         for (label, field) in [
@@ -769,7 +801,7 @@ impl eframe::App for Drafts {
                                                         ] {
                                                             ui.label(label);
                                                             ui.add(
-                                                                egui::TextEdit::singleline(field)
+                                                                crate::brand::field(field)
                                                                     .desired_width(52.0),
                                                             );
                                                         }
@@ -808,14 +840,21 @@ impl eframe::App for Drafts {
                                     ui.heading(t("Conditions", "Terms"));
                                     ui.horizontal(|ui| {
                                         ui.label(t("Remise globale %", "Overall discount %"));
-                                        ui.text_edit_singleline(&mut self.quote.global_discount);
+                                        ui.add(crate::brand::field(&mut self.quote.global_discount));
                                     });
-                                    ui.horizontal(|ui| {
-                                        ui.label(t("Valable jusqu’au", "Valid until"));
-                                        ui.text_edit_singleline(&mut self.quote.valid_until);
+                                    egui::Grid::new("terms_fields").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
+                                        for (label, field) in [
+                                            (t("Conditions de règlement", "Payment terms"), &mut self.quote.payment_terms),
+                                            (t("Mode de règlement", "Payment method"), &mut self.quote.payment_method),
+                                            (t("Validité du devis", "Quote valid for"), &mut self.quote.valid_until),
+                                        ] {
+                                            ui.label(label);
+                                            ui.add(crate::brand::field(field).desired_width(ui.available_width()));
+                                            ui.end_row();
+                                        }
                                     });
-                                    ui.label(t("Conditions", "Terms"));
-                                    ui.text_edit_multiline(&mut self.quote.terms);
+                                    ui.label(t("Mentions complémentaires", "Additional notes"));
+                                    ui.add(crate::brand::area(&mut self.quote.terms));
                                     ui.horizontal_wrapped(|ui| {
                                         if ui
                                             .button(t("Enregistrer le brouillon", "Save draft"))
@@ -863,15 +902,22 @@ impl eframe::App for Drafts {
                                             let kind = self.editing.and_then(|id| self.store.billing_state(id).ok())
                                                 .map(|state| state.kind)
                                                 .unwrap_or_else(|| if self.page == Page::Invoices { "invoice".into() } else { "quote".into() });
-                                            let language = self.document_language.code();
-                                            let result = self.store.issuer().and_then(|issuer| crate::pdf::render(
-                                                &crate::pdf::draft_label(&kind, language),
-                                                &self.title,
-                                                &self.currency,
-                                                self.document_language.code(),
-                                                &self.quote,
-                                                crate::pdf::DocumentContext { issuer: Some(&issuer), ..Default::default() },
-                                            ));
+                                            let result = (|| {
+                                                let issuer = self.store.issuer()?;
+                                                let logo = self.store.logo()?;
+                                                crate::pdf::render(&crate::pdf::Document {
+                                                    kind: &kind,
+                                                    number: None,
+                                                    date: &self.store.today()?,
+                                                    title: &self.title,
+                                                    currency: &self.currency,
+                                                    language: self.document_language.code(),
+                                                    quote: &self.quote,
+                                                    issuer: &issuer,
+                                                    logo: logo.as_deref(),
+                                                    applied_deposit: None,
+                                                })
+                                            })();
                                             match result {
                                                 Ok(bytes) => {
                                                     if let Some(path) = rfd::FileDialog::new()
@@ -929,7 +975,7 @@ impl eframe::App for Drafts {
                             {
                                 self.editing = None;
                                 self.title.clear();
-                                self.quote = Default::default();
+                                self.quote = self.new_quote();
                                 self.error = None;
                                 self.composing = true;
                             }
@@ -956,7 +1002,7 @@ impl eframe::App for Drafts {
                 let mut selected = None;
                 if !self.composing {
                     ui.add(
-                        egui::TextEdit::singleline(&mut self.quote_query)
+                        crate::brand::field(&mut self.quote_query)
                             .hint_text(t("Rechercher un document", "Search documents")),
                     );
                     let query = self.quote_query.trim().to_lowercase();
@@ -1091,19 +1137,19 @@ impl eframe::App for Drafts {
                     if state.number.is_none() && ui.add(crate::brand::primary(finalize_label)).clicked() {
                         let result = self.store.finalize_document_versioned(id, self.review_version, |draft, quote, number, issued_on| {
                             let issuer = self.store.issuer()?;
-                            let kind = crate::pdf::kind_label(&state.kind, &draft.language);
-                            let label = if number.starts_with("TEST-") {
-                                let marker = if draft.language == "fr" { "DÉMONSTRATION" } else { "DEMONSTRATION" };
-                                format!("{marker} · {kind} · {number}")
-                            } else {
-                                format!("{kind} · {number}")
-                            };
-                            crate::pdf::render(&label, &draft.title, &draft.currency, &draft.language, quote,
-                                crate::pdf::DocumentContext {
-                                    issuer: Some(&issuer),
-                                    applied_deposit: (state.kind == "invoice").then_some((&state.deposits, &state.outstanding)),
-                                    issued_on: Some(issued_on),
-                                })
+                            let logo = self.store.logo()?;
+                            crate::pdf::render(&crate::pdf::Document {
+                                kind: &state.kind,
+                                number: Some(number),
+                                date: issued_on,
+                                title: &draft.title,
+                                currency: &draft.currency,
+                                language: &draft.language,
+                                quote,
+                                issuer: &issuer,
+                                logo: logo.as_deref(),
+                                applied_deposit: (state.kind == "invoice").then_some((&state.deposits, &state.outstanding)),
+                            })
                         });
                         match result { Ok(number) => { self.notice = Some(format!("{} {number}", if number.starts_with("TEST-") { t("Démonstration finalisée :", "Demonstration finalized:") } else { t("Document finalisé :", "Document finalized:") })); self.review = None; self.refresh(); }, Err(error) => self.error = Some(error.to_string()) }
                     }
@@ -1112,7 +1158,7 @@ impl eframe::App for Drafts {
                             match self.store.finalized_pdf(id) { Ok(bytes) => if let Some(path) = rfd::FileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(format!("{}.pdf", state.number.as_deref().unwrap_or("document"))).save_file() && let Err(error) = crate::operations::write_file(&path, &bytes) { self.error = Some(error.to_string()); }, Err(error) => self.error = Some(error.to_string()) }
                         }
                         if state.kind == "quote" && !state.accepted {
-                            ui.horizontal(|ui| { ui.label(t("Date d’acceptation (AAAA-MM-JJ)", "Acceptance date (YYYY-MM-DD)")); ui.text_edit_singleline(&mut self.event_date); });
+                            ui.horizontal(|ui| { ui.label(t("Date d’acceptation (AAAA-MM-JJ)", "Acceptance date (YYYY-MM-DD)")); ui.add(crate::brand::field(&mut self.event_date)); });
                             if ui.button(t("Marquer accepté", "Mark accepted")).clicked() { match self.store.accept_quote(id, &self.event_date) { Ok(()) => { self.review = None; self.refresh(); }, Err(error) => self.error = Some(error.to_string()) } }
                         }
                         if state.kind == "quote" && state.accepted {
@@ -1123,8 +1169,8 @@ impl eframe::App for Drafts {
                         if state.kind == "invoice" && ui.button(t("Créer un avoir", "Create credit note")).clicked() { match self.store.derive_document(id, "credit", &draft.title) { Ok(_) => { self.review = None; self.refresh(); }, Err(error) => self.error = Some(error.to_string()) } }
                         if matches!(state.kind.as_str(), "invoice" | "deposit") {
                             ui.label(format!("{}: {} · {}: {} · {}: {} · {}: {}", t("Acomptes", "Deposits"), state.deposits, t("Réglé", "Paid"), state.paid, t("Avoirs", "Credits"), state.credited, t("Reste à payer", "Outstanding"), state.outstanding));
-                            ui.horizontal(|ui| { ui.label(t("Montant", "Amount")); ui.text_edit_singleline(&mut self.payment_amount); ui.label(t("Date AAAA-MM-JJ", "Date YYYY-MM-DD")); ui.text_edit_singleline(&mut self.event_date); });
-                            ui.horizontal(|ui| { ui.label(t("Mode", "Method")); ui.text_edit_singleline(&mut self.payment_method); });
+                            ui.horizontal(|ui| { ui.label(t("Montant", "Amount")); ui.add(crate::brand::field(&mut self.payment_amount)); ui.label(t("Date AAAA-MM-JJ", "Date YYYY-MM-DD")); ui.add(crate::brand::field(&mut self.event_date)); });
+                            ui.horizontal(|ui| { ui.label(t("Mode", "Method")); ui.add(crate::brand::field(&mut self.payment_method)); });
                             if ui.button(t("Enregistrer le règlement", "Record payment")).clicked() { match self.store.record_payment(id, &self.payment_amount, &self.event_date, &self.payment_method, "") { Ok(()) => { self.review = None; self.refresh(); }, Err(error) => self.error = Some(error.to_string()) } }
                         }
                     }
@@ -1167,6 +1213,18 @@ impl eframe::App for Drafts {
 }
 
 impl Drafts {
+    /// Empty document carrying the issuer's default conditions.
+    fn new_quote(&self) -> facturecraft_core::quote::Quote {
+        let issuer = self.store.issuer().unwrap_or_default();
+        facturecraft_core::quote::Quote {
+            terms: issuer.terms,
+            payment_terms: issuer.payment_terms,
+            payment_method: issuer.payment_method,
+            valid_until: issuer.quote_validity,
+            ..Default::default()
+        }
+    }
+
     fn products_page(&mut self, ui: &mut egui::Ui, fr: bool) {
         let t = |f, e| if fr { f } else { e };
         ui.horizontal(|ui| {
@@ -1235,12 +1293,12 @@ impl Drafts {
                             ),
                         ] {
                             ui.label(label);
-                            ui.add(egui::TextEdit::singleline(field).desired_width(width));
+                            ui.add(crate::brand::field(field).desired_width(width));
                             ui.end_row();
                         }
                         ui.label(t("Description", "Description"));
                         ui.add(
-                            egui::TextEdit::multiline(&mut product.description)
+                            crate::brand::area(&mut product.description)
                                 .desired_rows(3)
                                 .desired_width(320.0),
                         );
@@ -1361,6 +1419,176 @@ impl Drafts {
             }
             self.refresh();
         }
+    }
+
+    fn issuer_settings(&mut self, ui: &mut egui::Ui, fr: bool) {
+        let t = |f, e| if fr { f } else { e };
+        ui.heading(t("Identité de l’émetteur", "Issuer details"));
+        ui.label(t("Ces informations figurent sur vos devis et factures. Elles sont figées dans chaque document au moment de sa finalisation.", "These details appear on your quotes and invoices and are frozen into each document when it is finalized."));
+        crate::brand::card(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.horizontal(|ui| {
+                if self.logo_texture.is_none() {
+                    let texture = self.store.logo().ok().flatten().and_then(|png| {
+                        let image = image::load_from_memory(&png).ok()?.into_rgba8();
+                        let size = [image.width() as usize, image.height() as usize];
+                        Some(ui.ctx().load_texture(
+                            "issuer-logo",
+                            egui::ColorImage::from_rgba_unmultiplied(size, &image),
+                            egui::TextureOptions::LINEAR,
+                        ))
+                    });
+                    self.logo_texture = Some(texture);
+                }
+                match self.logo_texture.as_ref().and_then(Option::as_ref) {
+                    Some(texture) => {
+                        let size = texture.size_vec2();
+                        let scale = (72.0 / size.x.max(size.y)).min(1.0);
+                        ui.image((texture.id(), size * scale));
+                    }
+                    None => {
+                        ui.weak(t("Aucun logo", "No logo"));
+                    }
+                }
+                ui.vertical(|ui| {
+                    ui.label(
+                        egui::RichText::new(t("Logo de l’entreprise", "Company logo")).strong(),
+                    );
+                    ui.weak(t(
+                        "PNG ou JPEG, affiché en haut à droite des documents.",
+                        "PNG or JPEG, shown at the top right of documents.",
+                    ));
+                    ui.horizontal(|ui| {
+                        if ui.button(t("Choisir un logo…", "Choose a logo…")).clicked()
+                            && let Some(path) = rfd::FileDialog::new()
+                                .add_filter("Image", &["png", "jpg", "jpeg"])
+                                .pick_file()
+                        {
+                            let saved = std::fs::read(&path)
+                                .map_err(anyhow::Error::from)
+                                .and_then(|bytes| crate::pdf::prepare_logo(&bytes))
+                                .and_then(|png| self.store.save_logo(&png));
+                            match saved {
+                                Ok(()) => {
+                                    self.logo_texture = None;
+                                    self.error = None;
+                                    self.notice = Some(t("Logo enregistré.", "Logo saved.").into());
+                                }
+                                Err(error) => {
+                                    self.error = Some(format!(
+                                        "{} {error}",
+                                        t("Logo illisible :", "Unreadable logo:")
+                                    ))
+                                }
+                            }
+                        }
+                        if matches!(self.logo_texture, Some(Some(_)))
+                            && ui.button(t("Retirer le logo", "Remove logo")).clicked()
+                        {
+                            match self.store.clear_logo() {
+                                Ok(()) => self.logo_texture = None,
+                                Err(error) => self.error = Some(error.to_string()),
+                            }
+                        }
+                    });
+                });
+            });
+            ui.separator();
+            egui::Grid::new("issuer_fields")
+                .num_columns(2)
+                .spacing([12.0, 6.0])
+                .show(ui, |ui| {
+                    for (label, field, rows) in [
+                        (t("Société", "Company"), &mut self.issuer.name, 1),
+                        (
+                            t("Votre contact", "Contact person"),
+                            &mut self.issuer.contact,
+                            1,
+                        ),
+                        (t("Adresse", "Address"), &mut self.issuer.address, 2),
+                        (t("Pays", "Country"), &mut self.issuer.country, 1),
+                        (
+                            t("N° SIREN", "Company number"),
+                            &mut self.issuer.registration,
+                            1,
+                        ),
+                        (t("Numéro de TVA", "VAT number"), &mut self.issuer.vat_id, 1),
+                        (t("Téléphone", "Phone"), &mut self.issuer.phone, 1),
+                        (t("E-mail", "Email"), &mut self.issuer.email, 1),
+                    ] {
+                        ui.label(label);
+                        let edit = if rows > 1 {
+                            crate::brand::area(field).desired_rows(rows)
+                        } else {
+                            crate::brand::field(field)
+                        };
+                        ui.add(edit.desired_width(ui.available_width()));
+                        ui.end_row();
+                    }
+                });
+        });
+        ui.add_space(12.0);
+        ui.heading(t("Conditions par défaut", "Default conditions"));
+        crate::brand::card(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.weak(t(
+                "Reprises dans chaque nouveau document, puis modifiables document par document.",
+                "Copied into each new document, then editable per document.",
+            ));
+            egui::Grid::new("default_terms")
+                .num_columns(2)
+                .spacing([12.0, 6.0])
+                .show(ui, |ui| {
+                    for (label, field) in [
+                        (
+                            t("Conditions de règlement", "Payment terms"),
+                            &mut self.issuer.payment_terms,
+                        ),
+                        (
+                            t("Mode de règlement", "Payment method"),
+                            &mut self.issuer.payment_method,
+                        ),
+                        (
+                            t("Validité du devis", "Quote validity"),
+                            &mut self.issuer.quote_validity,
+                        ),
+                        (
+                            t("Mentions complémentaires", "Additional notes"),
+                            &mut self.issuer.terms,
+                        ),
+                    ] {
+                        ui.label(label);
+                        ui.add(crate::brand::field(field).desired_width(ui.available_width()));
+                        ui.end_row();
+                    }
+                });
+            ui.label(t(
+                "Conditions générales de vente (imprimées sur une page dédiée des devis)",
+                "General terms of sale (printed on a dedicated page of quotes)",
+            ));
+            ui.add(
+                crate::brand::area(&mut self.issuer.cgv)
+                    .desired_rows(8)
+                    .desired_width(f32::INFINITY),
+            );
+        });
+        ui.add_space(8.0);
+        if ui
+            .add(crate::brand::primary(t(
+                "Enregistrer les paramètres",
+                "Save settings",
+            )))
+            .clicked()
+        {
+            match self.store.save_issuer(&self.issuer) {
+                Ok(()) => {
+                    self.notice = Some(t("Paramètres enregistrés.", "Settings saved.").into());
+                    self.error = None;
+                }
+                Err(error) => self.error = Some(error.to_string()),
+            }
+        }
+        ui.add_space(18.0);
     }
 
     fn numbering_settings(&mut self, ui: &mut egui::Ui, fr: bool) {

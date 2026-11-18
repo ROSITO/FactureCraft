@@ -93,7 +93,7 @@ fn tools() -> Value {
         &["description", "quantity", "price", "discount", "vat"],
     );
     let quote = object(
-        json!({"recipient":string,"recipient_email":string,"recipient_address":string,"valid_until":string,"terms":string,"global_discount":string,"lines":{"type":"array","items":line}}),
+        json!({"recipient":string,"recipient_email":string,"recipient_address":string,"recipient_country":string,"recipient_registration":string,"payment_terms":string,"payment_method":string,"valid_until":string,"terms":string,"global_discount":string,"lines":{"type":"array","items":line}}),
         &["recipient", "lines"],
     );
     let draft_id = object(json!({"id":id}), &["id"]);

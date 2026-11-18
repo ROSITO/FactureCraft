@@ -30,19 +30,20 @@ pub fn render_draft(store: &Store, id: i64) -> Result<Vec<u8>> {
         return Ok(pdf);
     }
     let issuer = store.document_issuer(id)?;
-    crate::pdf::render(
-        &crate::pdf::draft_label(&billing.kind, &draft.language),
-        &draft.title,
-        &draft.currency,
-        &draft.language,
-        &quote,
-        crate::pdf::DocumentContext {
-            issuer: Some(&issuer),
-            applied_deposit: (billing.kind == "invoice")
-                .then_some((&billing.deposits, &billing.outstanding)),
-            ..Default::default()
-        },
-    )
+    let logo = store.logo()?;
+    crate::pdf::render(&crate::pdf::Document {
+        kind: &billing.kind,
+        number: None,
+        date: &store.today()?,
+        title: &draft.title,
+        currency: &draft.currency,
+        language: &draft.language,
+        quote: &quote,
+        issuer: &issuer,
+        logo: logo.as_deref(),
+        applied_deposit: (billing.kind == "invoice")
+            .then_some((&billing.deposits, &billing.outstanding)),
+    })
 }
 
 pub fn read_quote(path: &Path) -> Result<Quote> {

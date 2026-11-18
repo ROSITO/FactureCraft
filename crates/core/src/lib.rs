@@ -40,6 +40,8 @@ impl Store {
         )?;
         billing::initialize(&conn)?;
         products::initialize(&conn)?;
+        issuer::initialize(&conn)?;
+        contacts::initialize(&conn)?;
         Ok(Self(conn))
     }
 

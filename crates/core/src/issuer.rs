@@ -12,6 +12,22 @@ pub struct Issuer {
     pub registration: String,
     pub vat_id: String,
     pub terms: String,
+    pub contact: String,
+    pub country: String,
+    pub phone: String,
+    /// Defaults copied into new documents.
+    pub payment_terms: String,
+    pub payment_method: String,
+    pub quote_validity: String,
+    /// General terms of sale, printed on their own page of quotes.
+    pub cgv: String,
+}
+
+pub(crate) fn initialize(db: &rusqlite::Connection) -> Result<()> {
+    db.execute_batch(
+        "CREATE TABLE IF NOT EXISTS issuer_logo(id INTEGER PRIMARY KEY CHECK(id=1), png BLOB NOT NULL);",
+    )?;
+    Ok(())
 }
 
 impl Store {
@@ -45,6 +61,35 @@ impl Store {
         }
         tx.commit()?;
         Ok(())
+    }
+
+    /// Logo as PNG bytes, already resized for documents.
+    pub fn logo(&self) -> Result<Option<Vec<u8>>> {
+        Ok(self
+            .0
+            .query_row("SELECT png FROM issuer_logo WHERE id=1", [], |r| r.get(0))
+            .optional()?)
+    }
+
+    pub fn save_logo(&self, png: &[u8]) -> Result<()> {
+        ensure!(png.starts_with(b"\x89PNG"), "Logo must be a PNG image");
+        self.0.execute(
+            "INSERT INTO issuer_logo(id,png) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET png=excluded.png",
+            [png],
+        )?;
+        Ok(())
+    }
+
+    pub fn clear_logo(&self) -> Result<()> {
+        self.0.execute("DELETE FROM issuer_logo", [])?;
+        Ok(())
+    }
+
+    /// Local date `YYYY-MM-DD`.
+    pub fn today(&self) -> Result<String> {
+        Ok(self
+            .0
+            .query_row("SELECT date('now','localtime')", [], |r| r.get(0))?)
     }
 
     pub fn document_issuer(&self, id: i64) -> Result<Issuer> {

@@ -7,7 +7,29 @@ use serde::{Deserialize, Serialize};
 pub struct Contact {
     pub name: String,
     pub email: String,
+    /// One line per address line.
     pub address: String,
+    #[serde(default)]
+    pub country: String,
+    /// Company number (SIREN or equivalent).
+    #[serde(default)]
+    pub registration: String,
+}
+
+pub(crate) fn initialize(db: &rusqlite::Connection) -> Result<()> {
+    for column in ["country", "registration"] {
+        let exists: bool = db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('contacts') WHERE name=?1)",
+            [column],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            db.execute_batch(&format!(
+                "ALTER TABLE contacts ADD COLUMN {column} TEXT NOT NULL DEFAULT ''"
+            ))?;
+        }
+    }
+    Ok(())
 }
 
 impl Store {
@@ -15,12 +37,14 @@ impl Store {
         let mut records = Vec::new();
         let mut query = self
             .0
-            .prepare("SELECT name,email,address FROM contacts ORDER BY name COLLATE NOCASE")?;
+            .prepare("SELECT name,email,address,country,registration FROM contacts ORDER BY name COLLATE NOCASE")?;
         for row in query.query_map([], |row| {
             Ok(Contact {
                 name: row.get(0)?,
                 email: row.get(1)?,
                 address: row.get(2)?,
+                country: row.get(3)?,
+                registration: row.get(4)?,
             })
         })? {
             records.push(row?);
@@ -50,15 +74,18 @@ impl Store {
                 if let Some(extra) = record["additional_address_lines"].as_array() {
                     address.extend(extra.iter().filter_map(serde_json::Value::as_str));
                 }
-                address.extend([city.trim(), field("country")]);
+                address.push(city.trim());
                 records.push(Contact {
                     name,
                     email: field("email").into(),
                     address: address
                         .into_iter()
-                        .filter(|part| !part.trim().is_empty())
+                        .map(str::trim)
+                        .filter(|part| !part.is_empty())
                         .collect::<Vec<_>>()
-                        .join(", "),
+                        .join("\n"),
+                    country: field("country").into(),
+                    registration: field("company_number").into(),
                 });
             }
         }
@@ -74,8 +101,9 @@ impl Store {
             "Contact name must contain 1–200 characters"
         );
         self.0.execute(
-            "INSERT INTO contacts(name,email,address) VALUES (?1,?2,?3) ON CONFLICT(name,email,address) DO NOTHING",
-            params![name, contact.email.trim(), contact.address.trim()],
+            "INSERT INTO contacts(name,email,address,country,registration) VALUES (?1,?2,?3,?4,?5)
+            ON CONFLICT(name,email,address) DO UPDATE SET country=excluded.country, registration=excluded.registration",
+            params![name, contact.email.trim(), contact.address.trim(), contact.country.trim(), contact.registration.trim()],
         )?;
         Ok(())
     }

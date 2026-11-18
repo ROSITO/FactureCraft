@@ -3,6 +3,7 @@ mod dashboard;
 mod mcp;
 mod operations;
 mod pdf;
+mod subset;
 mod ui;
 
 use anyhow::{Context, Result};

@@ -12,6 +12,15 @@ pub struct Quote {
     #[serde(default)]
     pub recipient_address: String,
     #[serde(default)]
+    pub recipient_country: String,
+    /// Company number (SIREN or equivalent).
+    #[serde(default)]
+    pub recipient_registration: String,
+    #[serde(default)]
+    pub payment_terms: String,
+    #[serde(default)]
+    pub payment_method: String,
+    #[serde(default)]
     pub valid_until: String,
     #[serde(default)]
     pub terms: String,
@@ -68,6 +77,21 @@ impl Quote {
         Ok((format(net), format(vat), format(net + vat)))
     }
 
+    /// Net amount of each line after its own discount, before the global discount.
+    pub fn line_nets(&self, currency: &str) -> Result<Vec<String>> {
+        let precision = currency_precision(currency)?;
+        self.lines
+            .iter()
+            .map(|line| {
+                Ok(format!(
+                    "{:.*}",
+                    precision as usize,
+                    line_net(line, precision)?
+                ))
+            })
+            .collect()
+    }
+
     pub fn tax_breakdown(&self, currency: &str) -> Result<Vec<TaxBucket>> {
         use std::collections::BTreeMap;
         let precision = currency_precision(currency)?;
@@ -86,19 +110,13 @@ impl Quote {
                 !line.description.trim().is_empty(),
                 "A line needs a description"
             );
-            let quantity = number(&line.quantity)?;
-            let price = number(&line.price)?;
-            let discount = number(&line.discount)?;
             let rate = number(&line.vat)?;
-            ensure!(
-                discount <= hundred && rate <= hundred,
-                "Percentages must be from 0 to 100"
-            );
+            ensure!(rate <= hundred, "Percentages must be from 0 to 100");
             ensure!(
                 rate.is_zero() || line.exemption_reason.trim().is_empty(),
                 "Exemption requires a zero tax rate"
             );
-            let line_net = (quantity * price * (hundred - discount) / hundred).round_dp(precision);
+            let line_net = line_net(line, precision)?;
             cumulative_net += line_net;
             // Cumulative rounding allocates the full discount down to the last minor unit,
             // with tied remainders resolved by the persisted line order.
@@ -122,6 +140,16 @@ impl Quote {
             })
             .collect())
     }
+}
+
+fn line_net(line: &Line, precision: u32) -> Result<Decimal> {
+    let hundred = Decimal::from(100);
+    let discount = number(&line.discount)?;
+    ensure!(discount <= hundred, "Percentages must be from 0 to 100");
+    Ok(
+        (number(&line.quantity)? * number(&line.price)? * (hundred - discount) / hundred)
+            .round_dp(precision),
+    )
 }
 
 fn currency_precision(currency: &str) -> Result<u32> {

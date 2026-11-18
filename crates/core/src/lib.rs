@@ -36,8 +36,9 @@ impl Store {
             title TEXT NOT NULL,
             currency TEXT NOT NULL,
             language TEXT NOT NULL
-        );",
+        ); CREATE TABLE IF NOT EXISTS quote_details (draft_id INTEGER PRIMARY KEY, details TEXT NOT NULL); CREATE TABLE IF NOT EXISTS contacts (name TEXT NOT NULL, email TEXT NOT NULL, address TEXT NOT NULL, UNIQUE(name,email,address));",
         )?;
+        billing::initialize(&conn)?;
         Ok(Self(conn))
     }
 
@@ -97,3 +98,16 @@ fn read_draft(row: &rusqlite::Row<'_>) -> rusqlite::Result<Draft> {
         language: row.get(3)?,
     })
 }
+
+pub mod import;
+
+pub mod quote;
+
+pub mod contacts;
+
+pub mod billing;
+mod idempotency;
+
+pub mod backup;
+
+pub mod issuer;

@@ -1,5 +1,10 @@
 name: Rust
-on: [push, pull_request]
+
+on: [push, pull_request, workflow_dispatch]
+
+permissions:
+  contents: read
+
 jobs:
   test:
     strategy:
@@ -12,3 +17,32 @@ jobs:
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libxcb-shape0-dev libxcb-xfixes0-dev libgl1-mesa-dev
       - run: cargo test --workspace --locked
+      - name: Build portable distribution
+        if: github.event_name == 'workflow_dispatch'
+        run: cargo build --package facturecraft --release --locked
+      - name: Package macOS or Linux binary
+        if: github.event_name == 'workflow_dispatch' && runner.os != 'Windows'
+        shell: bash
+        run: |
+          target/release/facturecraft --version
+          mkdir -p distribution/facturecraft
+          cp target/release/facturecraft docs/utilisation.md assets/fonts/*OFL.txt distribution/facturecraft/
+          tar -czf "distribution/facturecraft-${RUNNER_OS}-${RUNNER_ARCH}.tar.gz" -C distribution facturecraft
+      - name: Package Windows binary
+        if: github.event_name == 'workflow_dispatch' && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./target/release/facturecraft.exe --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Path distribution/facturecraft
+          Copy-Item -Path target/release/facturecraft.exe,docs/utilisation.md,assets/fonts/*OFL.txt -Destination distribution/facturecraft
+          Compress-Archive -Path distribution/facturecraft -DestinationPath "distribution/facturecraft-Windows-${env:RUNNER_ARCH}.zip"
+      - name: Upload portable distribution to the workflow run
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: facturecraft-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            distribution/*.tar.gz
+            distribution/*.zip
+          if-no-files-found: error

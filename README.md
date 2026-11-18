@@ -8,13 +8,15 @@ FactureCraft is a Rust desktop app for preparing quotes and invoices. The deskto
 
 ## Project status
 
-Sprint 1 provides a local draft workflow using the same database from the desktop app, command line, and MCP. A draft currently records a title, currency, and document language. Customers, line items, PDF generation, migration, and invoice issuance are later milestones.
+Sprints 1 to 4 are in place: contacts, quote lines with tax and discounts, PDF previews, Facture.net export import, quote-to-invoice conversion, deposits, payments and credit notes. Finalization currently assigns demonstration numbers (`TEST-…`); real numbering and issuance are part of sprint 5.
 
-| Interface | Sprint 1 |
+| Interface | Current scope |
 | --- | --- |
-| Native desktop app | View saved drafts and choose the interface language |
-| `facturecraft` CLI | Create and inspect drafts |
-| `facturecraft mcp` | List and read drafts through a local stdio server |
+| Native desktop app | Edit documents with a live preview, finalize, mark quotes accepted, record payments |
+| `facturecraft` CLI | Prepare and update drafts, derive documents, preview PDFs, import, backup and restore |
+| `facturecraft mcp` | Search contacts, read documents, prepare drafts and PDF previews through a local stdio server |
+
+See the [usage guide](docs/utilisation.md) (French) for commands and MCP tools.
 
 ## Run from source
 
@@ -28,7 +30,7 @@ cargo run -- --help
 
 The draft created by the first command appears in the desktop app. The interface language and document language can differ.
 
-For MCP clients, build with `cargo build`. Set the server command to the absolute path of the resulting `facturecraft` executable in `target/debug` (use `facturecraft.exe` on Windows) and pass `mcp` as its sole argument. The server exposes `list_drafts` and `get_draft`.
+For MCP clients, build with `cargo build`. Set the server command to the absolute path of the resulting `facturecraft` executable in `target/debug` (use `facturecraft.exe` on Windows) and pass `mcp` as its sole argument. The server publishes its tools and input schemas on connection.
 
 ## Roadmap
 

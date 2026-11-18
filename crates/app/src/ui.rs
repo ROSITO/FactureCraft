@@ -3,10 +3,18 @@ use anyhow::Result;
 use eframe::egui;
 use facturecraft_core::{Draft, Store};
 
+const PLUM: egui::Color32 = egui::Color32::from_rgb(116, 36, 116);
+const DEEP_PLUM: egui::Color32 = egui::Color32::from_rgb(58, 22, 64);
+const CREAM: egui::Color32 = egui::Color32::from_rgb(252, 244, 234);
+const INK: egui::Color32 = egui::Color32::from_rgb(40, 31, 43);
+const LILAC: egui::Color32 = egui::Color32::from_rgb(234, 213, 244);
+const AMBER: egui::Color32 = egui::Color32::from_rgb(255, 178, 34);
+
 pub fn run(store: Store, language: Language) -> Result<()> {
     let image = image::load_from_memory(include_bytes!("../../../assets/facturecraft-logo.png"))?
         .into_rgba8();
     let (width, height) = image.dimensions();
+    let mark = egui::ColorImage::from_rgba_unmultiplied([width as usize, height as usize], &image);
     let icon = egui::IconData {
         rgba: image.into_raw(),
         width,
@@ -14,8 +22,8 @@ pub fn run(store: Store, language: Language) -> Result<()> {
     };
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([920.0, 620.0])
-            .with_min_inner_size([520.0, 380.0])
+            .with_inner_size([1100.0, 700.0])
+            .with_min_inner_size([650.0, 420.0])
             .with_icon(icon),
         ..Default::default()
     };
@@ -23,9 +31,27 @@ pub fn run(store: Store, language: Language) -> Result<()> {
         "FactureCraft",
         options,
         Box::new(move |creation| {
-            let mut visuals = egui::Visuals::dark();
-            visuals.panel_fill = egui::Color32::from_rgb(24, 20, 28);
-            visuals.selection.bg_fill = egui::Color32::from_rgb(116, 52, 120);
+            creation.egui_ctx.set_theme(egui::Theme::Light);
+            let mut fonts = egui::FontDefinitions::default();
+            fonts.font_data.insert(
+                "Sora".into(),
+                egui::FontData::from_static(include_bytes!("../../../assets/fonts/Sora.ttf"))
+                    .into(),
+            );
+            fonts
+                .families
+                .entry(egui::FontFamily::Proportional)
+                .or_default()
+                .insert(0, "Sora".into());
+            creation.egui_ctx.set_fonts(fonts);
+            let logo = creation.egui_ctx.load_texture(
+                "facturecraft-mark",
+                mark,
+                egui::TextureOptions::LINEAR,
+            );
+            let mut visuals = egui::Visuals::light();
+            visuals.panel_fill = CREAM;
+            visuals.selection.bg_fill = LILAC;
             creation.egui_ctx.set_visuals(visuals);
             creation.egui_ctx.style_mut(|style| {
                 style.spacing.item_spacing = egui::vec2(10.0, 10.0);
@@ -33,13 +59,34 @@ pub fn run(store: Store, language: Language) -> Result<()> {
             });
             let mut app = Drafts {
                 store,
+                logo,
                 items: Vec::new(),
                 error: None,
                 language,
                 title: String::new(),
+                quote: Default::default(),
+                editing: None,
+                contacts: Vec::new(),
                 currency: "EUR".into(),
                 document_language: language,
                 composing: false,
+                page: Page::Quotes,
+                contact_query: String::new(),
+                new_contact: None,
+                archive_items: Vec::new(),
+                archive_query: String::new(),
+                quote_query: String::new(),
+                confirm_discard: false,
+                close_pending: false,
+                notice: None,
+                review: None,
+                review_version: 0,
+                edit_version: None,
+                event_date: String::new(),
+                payment_amount: String::new(),
+                payment_method: String::new(),
+                deposit_id: String::new(),
+                issuer: Default::default(),
             };
             app.refresh();
             Ok(Box::new(app))
@@ -48,19 +95,148 @@ pub fn run(store: Store, language: Language) -> Result<()> {
     .map_err(|err| anyhow::anyhow!("{err}"))
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Page {
+    Quotes,
+    Invoices,
+    Settings,
+    Clients,
+    Archive,
+}
+
 struct Drafts {
     store: Store,
+    logo: egui::TextureHandle,
     items: Vec<Draft>,
     error: Option<String>,
     language: Language,
     title: String,
+    quote: facturecraft_core::quote::Quote,
+    editing: Option<i64>,
+    contacts: Vec<facturecraft_core::contacts::Contact>,
     currency: String,
     document_language: Language,
     composing: bool,
+    page: Page,
+    contact_query: String,
+    new_contact: Option<facturecraft_core::contacts::Contact>,
+    archive_items: Vec<facturecraft_core::import::ArchiveItem>,
+    archive_query: String,
+    quote_query: String,
+    confirm_discard: bool,
+    close_pending: bool,
+    notice: Option<String>,
+    review: Option<i64>,
+    review_version: i64,
+    edit_version: Option<i64>,
+    event_date: String,
+    payment_amount: String,
+    payment_method: String,
+    deposit_id: String,
+    issuer: facturecraft_core::issuer::Issuer,
 }
 
 impl Drafts {
+    fn preview(&self, ui: &mut egui::Ui) {
+        let french_ui = matches!(self.language, Language::Fr);
+        let french_document = matches!(self.document_language, Language::Fr);
+        ui.add_space(18.0);
+        ui.label(
+            egui::RichText::new(if french_ui {
+                "Aperçu du brouillon"
+            } else {
+                "Draft preview"
+            })
+            .size(18.0)
+            .strong(),
+        );
+        ui.add_space(8.0);
+        let ink = INK;
+        egui::Frame::new()
+            .fill(egui::Color32::from_rgb(255, 252, 247))
+            .inner_margin(24)
+            .corner_radius(8)
+            .show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                ui.label(
+                    egui::RichText::new(if french_document {
+                        "DEVIS · BROUILLON"
+                    } else {
+                        "QUOTE · DRAFT"
+                    })
+                    .color(ink)
+                    .strong(),
+                );
+                ui.add_space(12.0);
+                ui.label(
+                    egui::RichText::new(self.title.trim())
+                        .size(26.0)
+                        .color(ink)
+                        .strong(),
+                );
+                ui.label(egui::RichText::new(self.currency.trim().to_uppercase()).color(ink));
+                ui.label(egui::RichText::new(&self.quote.recipient).color(INK));
+                for field in [&self.quote.recipient_address, &self.quote.recipient_email] {
+                    if !field.is_empty() {
+                        ui.label(egui::RichText::new(field).color(INK));
+                    }
+                }
+                for line in &self.quote.lines {
+                    if !line.description.is_empty() {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{} × {}",
+                                line.quantity, line.description
+                            ))
+                            .color(INK),
+                        );
+                    }
+                }
+                if let Ok((net, vat, total)) = self.quote.totals(&self.currency) {
+                    ui.separator();
+                    let currency = self.currency.trim().to_uppercase();
+                    for (label, amount) in [
+                        (
+                            if french_document {
+                                "Total HT"
+                            } else {
+                                "Subtotal"
+                            },
+                            net,
+                        ),
+                        (if french_document { "TVA" } else { "Tax" }, vat),
+                        ("Total", total),
+                    ] {
+                        ui.label(
+                            egui::RichText::new(format!("{label}  {amount} {currency}")).color(INK),
+                        );
+                    }
+                }
+                if self.quote.totals(&self.currency).is_err() {
+                    ui.colored_label(ui.visuals().error_fg_color, if french_ui { "Vérifiez les montants, les descriptions et la devise pour calculer le total." } else { "Check amounts, descriptions and currency to calculate the total." });
+                }
+                ui.add_space(72.0);
+            });
+    }
+
     fn refresh(&mut self) {
+        if self.page == Page::Archive {
+            match self.store.archive() {
+                Ok(items) => {
+                    self.archive_items = items;
+                    self.error = None;
+                }
+                Err(error) => self.error = Some(error.to_string()),
+            }
+            return;
+        }
+        match self.store.contacts() {
+            Ok(contacts) => self.contacts = contacts,
+            Err(error) => {
+                self.error = Some(error.to_string());
+                return;
+            }
+        }
         match self.store.list() {
             Ok(items) => {
                 self.items = items;
@@ -73,134 +249,778 @@ impl Drafts {
 
 impl eframe::App for Drafts {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        if self.composing && ctx.input(|input| input.viewport().close_requested()) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.close_pending = true;
+            self.confirm_discard = true;
+        }
         let fr = matches!(self.language, Language::Fr);
         let t = |f, e| if fr { f } else { e };
-        let accent = egui::Color32::from_rgb(198, 129, 207);
+        egui::SidePanel::left("navigation")
+            .exact_width(176.0)
+            .resizable(false)
+            .frame(
+                egui::Frame::side_top_panel(&ctx.style())
+                    .fill(DEEP_PLUM)
+                    .inner_margin(18),
+            )
+            .show(ctx, |ui| {
+                ui.add_space(8.0);
+                ui.image((self.logo.id(), egui::vec2(54.0, 54.0)));
+                ui.label(
+                    egui::RichText::new("FactureCraft")
+                        .size(20.0)
+                        .strong()
+                        .color(CREAM),
+                );
+                let (line, _) = ui.allocate_exact_size(egui::vec2(38.0, 3.0), egui::Sense::hover());
+                ui.painter().rect_filled(line, 2.0, AMBER);
+                ui.add_space(17.0);
+                for (page, label) in [
+                    (Page::Quotes, t("Devis", "Quotes")),
+                    (Page::Invoices, t("Factures", "Invoices")),
+                    (Page::Clients, t("Clients", "Clients")),
+                    (Page::Archive, t("Archives", "Archive")),
+                    (Page::Settings, t("Paramètres", "Settings")),
+                ] {
+                    if ui
+                        .add_enabled_ui(!self.composing, |ui| {
+                            ui.add_sized(
+                                [140.0, 38.0],
+                                egui::Button::new(egui::RichText::new(label).color(CREAM))
+                                    .fill(if self.page == page { PLUM } else { DEEP_PLUM })
+                                    .stroke(egui::Stroke::NONE)
+                                    .corner_radius(8),
+                            )
+                        })
+                        .inner
+                        .clicked()
+                    {
+                        self.page = page;
+                        if page == Page::Settings {
+                            match self.store.issuer() {
+                                Ok(issuer) => self.issuer = issuer,
+                                Err(error) => self.error = Some(error.to_string()),
+                            }
+                        }
+                        self.refresh();
+                    }
+                }
+            });
+        if matches!(self.page, Page::Quotes | Page::Invoices)
+            && self.composing
+            && ctx.content_rect().width() >= 800.0
+        {
+            egui::SidePanel::right("quote_preview")
+                .default_width(340.0)
+                .min_width(300.0)
+                .show(ctx, |ui| self.preview(ui));
+        }
         egui::CentralPanel::default()
             .frame(egui::Frame::central_panel(&ctx.style()).inner_margin(28))
             .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new("FactureCraft")
-                            .size(17.0)
-                            .strong()
-                            .color(accent),
-                    );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button(t("Actualiser", "Refresh")).clicked() {
+                if self.page == Page::Settings {
+                    ui.heading(t("Identité de l’émetteur", "Issuer details"));
+                    ui.label(t("Ces informations sont conservées localement pour les documents de démonstration. L’émission réelle reste désactivée.", "These details are stored locally for demonstration documents. Real issuance remains disabled."));
+                    for (label, field) in [
+                        (t("Nom ou société", "Name or company"), &mut self.issuer.name),
+                        (t("Adresse", "Address"), &mut self.issuer.address),
+                        (t("E-mail", "Email"), &mut self.issuer.email),
+                        (t("Identifiant d’immatriculation", "Registration number"), &mut self.issuer.registration),
+                        (t("Numéro de TVA", "VAT number"), &mut self.issuer.vat_id),
+                        (t("Conditions par défaut", "Default terms"), &mut self.issuer.terms),
+                    ] { ui.label(label); ui.add(egui::TextEdit::singleline(field).desired_width(f32::INFINITY)); }
+                    if ui.button(t("Enregistrer les paramètres", "Save settings")).clicked() { match self.store.save_issuer(&self.issuer) { Ok(()) => { self.notice = Some(t("Paramètres enregistrés.", "Settings saved.").into()); self.error = None; }, Err(error) => self.error = Some(error.to_string()) } }
+                    if let Some(notice) = &self.notice { ui.label(notice); }
+                    if let Some(error) = &self.error { ui.colored_label(ui.visuals().error_fg_color, error); }
+                    return;
+                }
+                if self.page == Page::Clients {
+                    ui.horizontal(|ui| {
+                        ui.heading(t("Carnet clients", "Client directory"));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new(t("+ Nouveau client", "+ New client"))
+                                            .color(CREAM),
+                                    )
+                                    .fill(PLUM),
+                                )
+                                .clicked()
+                            {
+                                self.new_contact.get_or_insert_with(Default::default);
+                            }
+                        });
+                    });
+                    if let Some(contact) = &mut self.new_contact {
+                        let mut close = false;
+                        egui::Frame::group(ui.style())
+                            .inner_margin(16)
+                            .show(ui, |ui| {
+                                for (label, field) in [
+                                    (t("Nom ou société", "Name or company"), &mut contact.name),
+                                    (t("E-mail", "Email"), &mut contact.email),
+                                    (t("Adresse", "Address"), &mut contact.address),
+                                ] {
+                                    ui.label(label);
+                                    ui.text_edit_singleline(field);
+                                }
+                                ui.horizontal(|ui| {
+                                    if ui
+                                        .button(t("Enregistrer dans le carnet", "Save contact"))
+                                        .clicked()
+                                    {
+                                        match self.store.save_contact(contact) {
+                                            Ok(()) => close = true,
+                                            Err(error) => self.error = Some(error.to_string()),
+                                        }
+                                    }
+                                    if ui.button(t("Annuler", "Cancel")).clicked() {
+                                        close = true;
+                                    }
+                                });
+                            });
+                        if close {
+                            self.new_contact = None;
                             self.refresh();
                         }
+                    }
+                    if let Some(error) = &self.error {
+                        ui.colored_label(ui.visuals().error_fg_color, error);
+                    }
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.contact_query).hint_text(t(
+                            "Rechercher un client ou une société",
+                            "Search clients or companies",
+                        )),
+                    );
+                    let query = self.contact_query.trim().to_lowercase();
+                    egui::ScrollArea::vertical()
+                        .id_salt("contacts")
+                        .show(ui, |ui| {
+                            let mut found = false;
+                            for contact in &self.contacts {
+                                if ![&contact.name, &contact.email, &contact.address]
+                                    .iter()
+                                    .any(|field| field.to_lowercase().contains(&query))
+                                {
+                                    continue;
+                                }
+                                found = true;
+                                egui::Frame::group(ui.style())
+                                    .fill(egui::Color32::WHITE)
+                                    .inner_margin(12)
+                                    .corner_radius(8)
+                                    .show(ui, |ui| {
+                                        ui.set_min_width(ui.available_width());
+                                        ui.strong(&contact.name);
+                                        for field in [&contact.email, &contact.address] {
+                                            if !field.is_empty() {
+                                                ui.weak(field);
+                                            }
+                                        }
+                                    });
+                            }
+                            if !found {
+                                ui.weak(t("Aucun contact trouvé.", "No contacts found."));
+                            }
+                        });
+                    return;
+                }
+                if self.page == Page::Archive {
+                    ui.heading(t("Archives Facture.net", "Facture.net archive"));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.archive_query)
+                            .hint_text(t("Rechercher", "Search")),
+                    );
+                    if let Some(error) = &self.error {
+                        ui.colored_label(ui.visuals().error_fg_color, error);
+                    }
+                    if self.archive_items.is_empty() {
+                        ui.weak(t("Aucune archive importée.", "No imported archive."));
+                    }
+                    let query = self.archive_query.trim().to_lowercase();
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        for item in &self.archive_items {
+                            if !format!("{} {} {}", item.label, item.category, item.key)
+                                .to_lowercase()
+                                .contains(&query)
+                            {
+                                continue;
+                            }
+                            ui.horizontal_wrapped(|ui| {
+                                ui.strong(&item.label);
+                                ui.weak(format!("{} · {}", item.category, item.source));
+                                if let Some(link) = &item.record_link {
+                                    ui.weak(link);
+                                }
+                            });
+                        }
                     });
-                });
+                    return;
+                }
                 ui.add_space(16.0);
                 ui.horizontal(|ui| {
                     ui.label(
-                        egui::RichText::new(t("Devis", "Quotes"))
-                            .size(36.0)
-                            .strong(),
+                        egui::RichText::new(if self.page == Page::Invoices {
+                            t("Factures", "Invoices")
+                        } else {
+                            t("Devis", "Quotes")
+                        })
+                        .size(36.0)
+                        .strong(),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
-                            .add(
-                                egui::Button::new(t("+ Nouveau devis", "+ New quote"))
-                                    .fill(egui::Color32::from_rgb(116, 52, 120)),
+                            .add_enabled(
+                                !self.composing,
+                                egui::Button::new(
+                                    egui::RichText::new(if self.page == Page::Invoices {
+                                        t("+ Nouvelle facture", "+ New invoice")
+                                    } else {
+                                        t("+ Nouveau devis", "+ New quote")
+                                    })
+                                    .color(egui::Color32::WHITE)
+                                    .strong(),
+                                )
+                                .fill(PLUM),
                             )
                             .clicked()
                         {
+                            self.editing = None;
+                            self.edit_version = None;
+                            self.title.clear();
+                            if self.page == Page::Invoices {
+                                match self.store.create_invoice(
+                                    t("Nouvelle facture", "New invoice"),
+                                    "EUR",
+                                    self.language.code(),
+                                ) {
+                                    Ok(draft) => {
+                                        self.editing = Some(draft.id);
+                                        self.edit_version = self
+                                            .store
+                                            .billing_state(draft.id)
+                                            .ok()
+                                            .map(|s| s.version);
+                                        self.title = draft.title;
+                                        self.refresh();
+                                    }
+                                    Err(error) => {
+                                        self.error = Some(error.to_string());
+                                        return;
+                                    }
+                                }
+                            }
+                            self.quote = Default::default();
+                            if let Ok(issuer) = self.store.issuer() { self.quote.terms = issuer.terms; }
+                            self.currency = "EUR".into();
+                            self.document_language = self.language;
+                            self.error = None;
                             self.composing = true;
                         }
                     });
                 });
-                ui.weak(format!(
-                    "{} {}",
-                    self.items.len(),
-                    t("brouillon(s)", "draft(s)")
+                ui.weak(t(
+                    "Brouillons et documents de démonstration",
+                    "Drafts and demonstration documents",
                 ));
                 ui.add_space(12.0);
 
                 if self.composing {
-                    egui::Frame::group(ui.style())
-                        .inner_margin(16)
+                    egui::ScrollArea::vertical()
+                        .id_salt("editor")
                         .show(ui, |ui| {
-                            ui.label(t("Titre du devis", "Quote title"));
-                            ui.add(
-                                egui::TextEdit::singleline(&mut self.title)
-                                    .desired_width(f32::INFINITY),
-                            );
-                            ui.horizontal_wrapped(|ui| {
-                                ui.label(t("Devise", "Currency"));
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut self.currency)
-                                        .desired_width(56.0)
-                                        .char_limit(3),
-                                );
-                                egui::ComboBox::from_label(t(
-                                    "Langue du document",
-                                    "Document language",
-                                ))
-                                .selected_text(self.document_language.code().to_uppercase())
-                                .show_ui(ui, |ui| {
-                                    ui.selectable_value(
-                                        &mut self.document_language,
-                                        Language::Fr,
-                                        "Français",
+                            egui::Frame::group(ui.style())
+                                .inner_margin(16)
+                                .show(ui, |ui| {
+                                    ui.label(t("Titre du devis", "Quote title"));
+                                    ui.add(
+                                        egui::TextEdit::singleline(&mut self.title)
+                                            .desired_width(f32::INFINITY),
                                     );
-                                    ui.selectable_value(
-                                        &mut self.document_language,
-                                        Language::En,
-                                        "English",
-                                    );
-                                });
-                            });
-                            ui.horizontal(|ui| {
-                                if ui
-                                    .button(t("Enregistrer le brouillon", "Save draft"))
-                                    .clicked()
-                                {
-                                    match self.store.create(
-                                        &self.title,
-                                        &self.currency,
-                                        self.document_language.code(),
-                                    ) {
-                                        Ok(_) => {
-                                            self.title.clear();
-                                            self.composing = false;
-                                            self.refresh();
-                                        }
-                                        Err(error) => self.error = Some(error.to_string()),
+                                    ui.horizontal_wrapped(|ui| {
+                                        ui.label(t("Devise", "Currency"));
+                                        ui.add(
+                                            egui::TextEdit::singleline(&mut self.currency)
+                                                .desired_width(56.0)
+                                                .char_limit(3),
+                                        );
+                                        egui::ComboBox::from_label(t(
+                                            "Langue du document",
+                                            "Document language",
+                                        ))
+                                        .selected_text(self.document_language.code().to_uppercase())
+                                        .show_ui(
+                                            ui,
+                                            |ui| {
+                                                ui.selectable_value(
+                                                    &mut self.document_language,
+                                                    Language::Fr,
+                                                    "Français",
+                                                );
+                                                ui.selectable_value(
+                                                    &mut self.document_language,
+                                                    Language::En,
+                                                    "English",
+                                                );
+                                            },
+                                        );
+                                    });
+                                    ui.label(t("Destinataire", "Recipient"));
+                                    egui::ComboBox::from_id_salt("recipient_book")
+                                        .selected_text(t(
+                                            "Choisir dans le carnet",
+                                            "Choose from contacts",
+                                        ))
+                                        .show_ui(ui, |ui| {
+                                            for contact in &self.contacts {
+                                                let label = if contact.email.is_empty() {
+                                                    contact.name.clone()
+                                                } else {
+                                                    format!("{} · {}", contact.name, contact.email)
+                                                };
+                                                if ui.selectable_label(false, label).clicked() {
+                                                    self.quote.recipient.clone_from(&contact.name);
+                                                    self.quote
+                                                        .recipient_email
+                                                        .clone_from(&contact.email);
+                                                    self.quote
+                                                        .recipient_address
+                                                        .clone_from(&contact.address);
+                                                }
+                                            }
+                                        });
+                                    for (label, field) in [
+                                        (
+                                            t("Nom ou société", "Name or company"),
+                                            &mut self.quote.recipient,
+                                        ),
+                                        (t("E-mail", "Email"), &mut self.quote.recipient_email),
+                                        (
+                                            t("Adresse", "Address"),
+                                            &mut self.quote.recipient_address,
+                                        ),
+                                    ] {
+                                        ui.horizontal(|ui| {
+                                            ui.label(label);
+                                            ui.add(
+                                                egui::TextEdit::singleline(field)
+                                                    .desired_width(ui.available_width()),
+                                            );
+                                        });
                                     }
-                                }
-                                if ui.button(t("Annuler", "Cancel")).clicked() {
-                                    self.composing = false;
-                                    self.error = None;
-                                }
-                            });
+                                    if ui
+                                        .button(t("Ajouter au carnet", "Save to contacts"))
+                                        .clicked()
+                                    {
+                                        let contact = facturecraft_core::contacts::Contact {
+                                            name: self.quote.recipient.clone(),
+                                            email: self.quote.recipient_email.clone(),
+                                            address: self.quote.recipient_address.clone(),
+                                        };
+                                        match self.store.save_contact(&contact) {
+                                            Ok(()) => self.refresh(),
+                                            Err(error) => self.error = Some(error.to_string()),
+                                        }
+                                    }
+                                    ui.separator();
+                                    ui.heading(t("Prestations", "Line items"));
+                                    egui::ScrollArea::vertical()
+                                        .id_salt("quote_lines")
+                                        .max_height(230.0)
+                                        .show(ui, |ui| {
+                                            let mut remove = None;
+                                            for (index, line) in
+                                                self.quote.lines.iter_mut().enumerate()
+                                            {
+                                                ui.push_id(index, |ui| {
+                                                    ui.label(t("Description", "Description"));
+                                                    ui.text_edit_singleline(&mut line.description);
+                                                    ui.horizontal(|ui| {
+                                                        ui.label(t("Unité", "Unit"));
+                                                        ui.text_edit_singleline(&mut line.unit);
+                                                    });
+                                                    ui.horizontal(|ui| {
+                                                        ui.label(t(
+                                                            "Motif d’exonération",
+                                                            "Tax exemption reason",
+                                                        ));
+                                                        ui.text_edit_singleline(
+                                                            &mut line.exemption_reason,
+                                                        );
+                                                    });
+                                                    ui.horizontal_wrapped(|ui| {
+                                                        for (label, field) in [
+                                                            (t("Qté", "Qty"), &mut line.quantity),
+                                                            (
+                                                                t("Prix HT", "Unit price"),
+                                                                &mut line.price,
+                                                            ),
+                                                            (
+                                                                t("Remise %", "Discount %"),
+                                                                &mut line.discount,
+                                                            ),
+                                                            (t("TVA %", "Tax %"), &mut line.vat),
+                                                        ] {
+                                                            ui.label(label);
+                                                            ui.add(
+                                                                egui::TextEdit::singleline(field)
+                                                                    .desired_width(52.0),
+                                                            );
+                                                        }
+                                                        if ui
+                                                            .button(t("Retirer", "Remove"))
+                                                            .clicked()
+                                                        {
+                                                            remove = Some(index);
+                                                        }
+                                                    });
+                                                    ui.separator();
+                                                });
+                                            }
+                                            if let Some(index) = remove {
+                                                self.quote.lines.remove(index);
+                                            }
+                                        });
+                                    if ui.button(t("+ Ajouter une ligne", "+ Add line")).clicked() {
+                                        self.quote.lines.push(Default::default());
+                                    }
+                                    ui.separator();
+                                    ui.heading(t("Conditions", "Terms"));
+                                    ui.horizontal(|ui| {
+                                        ui.label(t("Remise globale %", "Overall discount %"));
+                                        ui.text_edit_singleline(&mut self.quote.global_discount);
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.label(t("Valable jusqu’au", "Valid until"));
+                                        ui.text_edit_singleline(&mut self.quote.valid_until);
+                                    });
+                                    ui.label(t("Conditions", "Terms"));
+                                    ui.text_edit_multiline(&mut self.quote.terms);
+                                    ui.horizontal_wrapped(|ui| {
+                                        if ui
+                                            .button(t("Enregistrer le brouillon", "Save draft"))
+                                            .clicked()
+                                        {
+                                            match if let (Some(id), Some(version)) =
+                                                (self.editing, self.edit_version)
+                                            {
+                                                self.store.save_quote_versioned(
+                                                    id,
+                                                    version,
+                                                    &self.title,
+                                                    &self.currency,
+                                                    self.document_language.code(),
+                                                    &self.quote,
+                                                )
+                                            } else {
+                                                self.store.save_quote(
+                                                    None,
+                                                    &self.title,
+                                                    &self.currency,
+                                                    self.document_language.code(),
+                                                    &self.quote,
+                                                )
+                                            } {
+                                                Ok(_) => {
+                                                    self.title.clear();
+                                                    self.notice = Some(
+                                                        t("Brouillon enregistré.", "Draft saved.")
+                                                            .into(),
+                                                    );
+                                                    self.composing = false;
+                                                    self.refresh();
+                                                }
+                                                Err(error) => self.error = Some(error.to_string()),
+                                            }
+                                        }
+                                        if ui
+                                            .button(t(
+                                                "Exporter le PDF brouillon",
+                                                "Export draft PDF",
+                                            ))
+                                            .clicked()
+                                        {
+                                            let kind = self.editing.and_then(|id| self.store.billing_state(id).ok())
+                                                .map(|state| state.kind)
+                                                .unwrap_or_else(|| if self.page == Page::Invoices { "invoice".into() } else { "quote".into() });
+                                            let language = self.document_language.code();
+                                            let result = self.store.issuer().and_then(|issuer| crate::pdf::render(
+                                                &crate::pdf::draft_label(&kind, language),
+                                                &self.title,
+                                                &self.currency,
+                                                self.document_language.code(),
+                                                &self.quote,
+                                                crate::pdf::DocumentContext { issuer: Some(&issuer), ..Default::default() },
+                                            ));
+                                            match result {
+                                                Ok(bytes) => {
+                                                    if let Some(path) = rfd::FileDialog::new()
+                                                        .add_filter("PDF", &["pdf"])
+                                                        .set_file_name("devis-brouillon.pdf")
+                                                        .save_file()
+                                                    {
+                                                        match crate::operations::write_file(&path, &bytes) {
+                                                            Ok(()) => {
+                                                                self.notice = Some(
+                                                                    t(
+                                                                        "PDF brouillon exporté.",
+                                                                        "Draft PDF exported.",
+                                                                    )
+                                                                    .into(),
+                                                                )
+                                                            }
+                                                            Err(error) => {
+                                                                self.error = Some(error.to_string())
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                Err(error) => self.error = Some(error.to_string()),
+                                            }
+                                        }
+                                        if ui.button(t("Annuler", "Cancel")).clicked() {
+                                            self.confirm_discard = true;
+                                        }
+                                    });
+                                });
                         });
+                }
+                if let Some(notice) = &self.notice {
+                    ui.label(notice);
                 }
                 if let Some(error) = &self.error {
                     ui.colored_label(ui.visuals().error_fg_color, error);
                 }
-                if self.items.is_empty() {
-                    ui.weak(t("Aucun devis enregistré.", "No saved quotes."));
+                if self.items.is_empty() && !self.composing && self.page == Page::Quotes {
+                    egui::Frame::group(ui.style())
+                        .fill(egui::Color32::WHITE)
+                        .inner_margin(32)
+                        .corner_radius(12)
+                        .show(ui, |ui| {
+                            ui.set_min_width(ui.available_width());
+                            ui.heading(t("Créez votre premier devis", "Create your first quote"));
+                            ui.label(t(
+                                "Choisissez le titre, la devise et la langue du document.",
+                                "Choose a title, currency, and document language.",
+                            ));
+                            if ui
+                                .button(t("Commencer un devis", "Start a quote"))
+                                .clicked()
+                            {
+                                self.editing = None;
+                                self.title.clear();
+                                self.quote = Default::default();
+                                self.error = None;
+                                self.composing = true;
+                            }
+                            if ui
+                                .link(t(
+                                    "Consulter les archives Facture.net",
+                                    "Browse the Facture.net archive",
+                                ))
+                                .clicked()
+                            {
+                                self.page = Page::Archive;
+                                self.refresh();
+                            }
+                        });
                 }
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    for draft in &self.items {
-                        egui::Frame::group(ui.style())
-                            .fill(egui::Color32::from_rgb(38, 31, 43))
-                            .inner_margin(16)
-                            .corner_radius(10)
-                            .show(ui, |ui| {
-                                ui.set_min_width(ui.available_width());
-                                ui.label(egui::RichText::new(&draft.title).size(17.0).strong());
-                                ui.weak(format!(
-                                    "#{}  ·  {}  ·  {}",
-                                    draft.id,
-                                    draft.currency,
-                                    draft.language.to_uppercase()
-                                ));
-                            });
+                if matches!(self.page, Page::Quotes | Page::Invoices)
+                    && self.composing
+                    && ctx.content_rect().width() < 800.0
+                {
+                    ui.collapsing(t("Aperçu du brouillon", "Draft preview"), |ui| {
+                        self.preview(ui)
+                    });
+                }
+                let mut selected = None;
+                if !self.composing {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.quote_query)
+                            .hint_text(t("Rechercher un document", "Search documents")),
+                    );
+                    let query = self.quote_query.trim().to_lowercase();
+                    let mut found = false;
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        for draft in &self.items {
+                            let Ok(state) = self.store.billing_state(draft.id) else {
+                                continue;
+                            };
+                            if (self.page == Page::Quotes) != (state.kind == "quote") {
+                                continue;
+                            }
+                            if !draft.title.to_lowercase().contains(&query)
+                                && !draft.id.to_string().contains(&query)
+                            {
+                                continue;
+                            }
+                            found = true;
+                            egui::Frame::group(ui.style())
+                                .fill(egui::Color32::WHITE)
+                                .inner_margin(16)
+                                .corner_radius(10)
+                                .show(ui, |ui| {
+                                    ui.set_min_width(ui.available_width());
+                                    ui.label(egui::RichText::new(&draft.title).size(17.0).strong());
+                                    ui.weak(format!(
+                                        "#{}  ·  {}  ·  {}",
+                                        draft.id,
+                                        draft.currency,
+                                        draft.language.to_uppercase()
+                                    ));
+                                    ui.label(format!(
+                                        "{} · {}",
+                                        state.kind,
+                                        state.number.as_deref().unwrap_or(t("Brouillon", "Draft"))
+                                    ));
+                                    ui.horizontal(|ui| {
+                                        if state.number.is_none()
+                                            && ui.button(t("Modifier", "Edit")).clicked()
+                                        {
+                                            selected = Some(draft.id);
+                                        }
+                                        if ui
+                                            .button(t("Voir et agir", "Review and actions"))
+                                            .clicked()
+                                        {
+                                            self.review = Some(draft.id);
+                                            self.review_version = state.version;
+                                        }
+                                    });
+                                });
+                        }
+                        if !found && !self.items.is_empty() {
+                            ui.weak(t("Aucun devis trouvé.", "No quotes found."));
+                        }
+                    });
+                }
+                if let Some(id) = selected {
+                    match (self.store.get(id), self.store.quote(id)) {
+                        (Ok(Some(draft)), Ok(quote)) => {
+                            self.editing = Some(id);
+                            self.edit_version =
+                                self.store.billing_state(id).ok().map(|state| state.version);
+                            self.title = draft.title;
+                            self.currency = draft.currency;
+                            self.document_language = if draft.language == "en" {
+                                Language::En
+                            } else {
+                                Language::Fr
+                            };
+                            self.quote = quote;
+                            self.composing = true;
+                            self.error = None;
+                        }
+                        _ => {
+                            self.error = Some(
+                                t("Impossible de charger le devis.", "Could not load quote.")
+                                    .into(),
+                            )
+                        }
                     }
-                });
+                }
             });
+        if let Some(id) = self.review {
+            if let (Ok(Some(draft)), Ok(quote), Ok(state)) = (
+                self.store.get(id),
+                self.store.quote(id),
+                self.store.billing_state(id),
+            ) {
+                egui::Window::new(t("Vérifier le document", "Review document")).collapsible(false).resizable(true).show(ctx, |ui| {
+                    ui.heading(&draft.title);
+                    ui.label(format!("{} · {}", state.kind, state.number.as_deref().unwrap_or(t("Brouillon", "Draft"))));
+                    ui.label(format!("{}: {}", t("Destinataire", "Recipient"), quote.recipient));
+                    if let Ok((net, vat, total)) = quote.totals(&draft.currency) {
+                        ui.label(format!("HT / Tax / Total : {net} / {vat} / {total} {}", draft.currency));
+                    }
+                    for line in &quote.lines { ui.label(format!("{} × {} · {}", line.quantity, line.description, line.price)); }
+                    ui.label(t("Les documents finalisés ici sont des démonstrations numérotées TEST, sans émission réelle.", "Finalized documents here are TEST-numbered demonstrations, not real issuance."));
+                    if state.kind == "invoice" && state.number.is_none() {
+                        ui.label(t("Affecter un acompte de démonstration", "Apply a demonstration deposit"));
+                        egui::ComboBox::from_id_salt("deposit_to_apply").selected_text(if self.deposit_id.is_empty() { t("Choisir un acompte", "Choose a deposit") } else { &self.deposit_id }).show_ui(ui, |ui| {
+                            for candidate in &self.items {
+                                if let Ok(info) = self.store.billing_state(candidate.id)
+                                    && info.kind == "deposit" && info.number.is_some() && info.source_id.is_some() && info.source_id == state.source_id && candidate.currency == draft.currency {
+                                        let label = format!("{} · {}", candidate.title, info.number.unwrap_or_default());
+                                        if ui.selectable_label(self.deposit_id == candidate.id.to_string(), label).clicked() { self.deposit_id = candidate.id.to_string(); }
+                                }
+                            }
+                        });
+                        if ui.button(t("Affecter", "Apply")).clicked() {
+                            match self.deposit_id.parse::<i64>() { Ok(deposit) => match self.store.allocate_deposit(id, deposit) { Ok(()) => { self.review = None; self.deposit_id.clear(); self.refresh(); }, Err(error) => self.error = Some(error.to_string()) }, Err(_) => self.error = Some(t("Choisissez un acompte.", "Choose a deposit.").into()) }
+                        }
+                    }
+                    if state.number.is_none() && ui.button(t("Finaliser la démonstration", "Finalize demonstration")).clicked() {
+                        let result = self.store.finalize_document_versioned(id, self.review_version, |draft, quote, number| {
+                            let issuer = self.store.issuer()?;
+                            let marker = if draft.language == "fr" { "DÉMONSTRATION" } else { "DEMONSTRATION" };
+                            let kind = crate::pdf::kind_label(&state.kind, &draft.language);
+                            crate::pdf::render(&format!("{marker} · {kind} · {number}"), &draft.title, &draft.currency, &draft.language, quote,
+                                crate::pdf::DocumentContext {
+                                    issuer: Some(&issuer),
+                                    applied_deposit: (state.kind == "invoice").then_some((&state.deposits, &state.outstanding)),
+                                })
+                        });
+                        match result { Ok(number) => { self.notice = Some(format!("{} {number}", t("Démonstration finalisée :", "Demonstration finalized:"))); self.review = None; self.refresh(); }, Err(error) => self.error = Some(error.to_string()) }
+                    }
+                    if state.number.is_some() {
+                        if ui.button(t("Exporter le PDF figé", "Export finalized PDF")).clicked() {
+                            match self.store.finalized_pdf(id) { Ok(bytes) => if let Some(path) = rfd::FileDialog::new().add_filter("PDF", &["pdf"]).set_file_name("demonstration.pdf").save_file() && let Err(error) = crate::operations::write_file(&path, &bytes) { self.error = Some(error.to_string()); }, Err(error) => self.error = Some(error.to_string()) }
+                        }
+                        if state.kind == "quote" && !state.accepted {
+                            ui.horizontal(|ui| { ui.label(t("Date d’acceptation (AAAA-MM-JJ)", "Acceptance date (YYYY-MM-DD)")); ui.text_edit_singleline(&mut self.event_date); });
+                            if ui.button(t("Marquer accepté", "Mark accepted")).clicked() { match self.store.accept_quote(id, &self.event_date) { Ok(()) => { self.review = None; self.refresh(); }, Err(error) => self.error = Some(error.to_string()) } }
+                        }
+                        if state.kind == "quote" && state.accepted {
+                            for (kind, label) in [("invoice", t("Créer une facture", "Create invoice")), ("deposit", t("Créer un acompte", "Create deposit"))] {
+                                if ui.button(label).clicked() { match self.store.derive_document(id, kind, &draft.title) { Ok(_) => { self.page = Page::Invoices; self.review = None; self.refresh(); }, Err(error) => self.error = Some(error.to_string()) } }
+                            }
+                        }
+                        if state.kind == "invoice" && ui.button(t("Créer un avoir", "Create credit note")).clicked() { match self.store.derive_document(id, "credit", &draft.title) { Ok(_) => { self.review = None; self.refresh(); }, Err(error) => self.error = Some(error.to_string()) } }
+                        if matches!(state.kind.as_str(), "invoice" | "deposit") {
+                            ui.label(format!("{}: {} · {}: {} · {}: {} · {}: {}", t("Acomptes", "Deposits"), state.deposits, t("Réglé", "Paid"), state.paid, t("Avoirs", "Credits"), state.credited, t("Reste à payer", "Outstanding"), state.outstanding));
+                            ui.horizontal(|ui| { ui.label(t("Montant", "Amount")); ui.text_edit_singleline(&mut self.payment_amount); ui.label(t("Date AAAA-MM-JJ", "Date YYYY-MM-DD")); ui.text_edit_singleline(&mut self.event_date); });
+                            ui.horizontal(|ui| { ui.label(t("Mode", "Method")); ui.text_edit_singleline(&mut self.payment_method); });
+                            if ui.button(t("Enregistrer le règlement", "Record payment")).clicked() { match self.store.record_payment(id, &self.payment_amount, &self.event_date, &self.payment_method, "") { Ok(()) => { self.review = None; self.refresh(); }, Err(error) => self.error = Some(error.to_string()) } }
+                        }
+                    }
+                    if let Some(error) = &self.error { ui.colored_label(ui.visuals().error_fg_color, error); }
+                    if ui.button(t("Fermer", "Close")).clicked() { self.review = None; self.error = None; }
+                });
+            } else {
+                self.review = None;
+            }
+        }
+        if self.confirm_discard {
+            egui::Window::new(t("Abandonner les modifications ?", "Discard changes?"))
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    ui.label(t(
+                        "Les modifications non enregistrées seront perdues.",
+                        "Unsaved changes will be lost.",
+                    ));
+                    ui.horizontal(|ui| {
+                        if ui
+                            .button(t("Continuer la saisie", "Keep editing"))
+                            .clicked()
+                        {
+                            self.confirm_discard = false;
+                        }
+                        if ui.button(t("Abandonner", "Discard")).clicked() {
+                            self.confirm_discard = false;
+                            self.composing = false;
+                            self.error = None;
+                            if self.close_pending {
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                self.close_pending = false;
+                            }
+                        }
+                    });
+                });
+        }
     }
 }

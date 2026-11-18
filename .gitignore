@@ -1,5 +1,10 @@
 /target/
 /exports/
 /.local/
-*.sqlite3*
+/backups/
+/generated-documents/
+*.sqlite*
+*.db
+*.db-wal
+*.db-shm
 .DS_Store

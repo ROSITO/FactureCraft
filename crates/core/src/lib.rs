@@ -134,6 +134,8 @@ pub mod products;
 
 pub mod documents;
 
+pub mod history;
+
 pub mod dashboard;
 
 pub mod facturx;

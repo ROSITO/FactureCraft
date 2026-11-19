@@ -180,6 +180,7 @@ pub fn run(store: Store, language: Option<Language>) -> Result<()> {
                 turn_forward: true,
                 page_turn,
                 payment_reference: String::new(),
+                archived: Vec::new(),
                 toast: None,
                 confirm_delete_document: false,
                 confirm_delete_payment: None,
@@ -278,6 +279,8 @@ struct Drafts {
     turn_forward: bool,
     page_turn: bool,
     payment_reference: String,
+    /// Imported Facture.net documents listed under live ones, read-only.
+    archived: Vec<facturecraft_core::history::ArchivedListing>,
     /// Message currently shown as a toast, when it appeared, and whether it is an error.
     toast: Option<(String, f64, bool)>,
     confirm_delete_document: bool,
@@ -451,6 +454,7 @@ impl Drafts {
         }
         let loaded = self.store.products().and_then(|products| {
             self.products = products;
+            self.archived = self.store.archived_documents()?;
             self.live_since = self.store.live_numbering()?;
             self.next_numbers = self.store.next_numbers()?;
             if self.page == Page::Dashboard {
@@ -1466,7 +1470,8 @@ impl eframe::App for Drafts {
                                     });
                                 });
                         }
-                        if !found && !self.items.is_empty() {
+                        let shown = self.archived_section(ui, fr, &query);
+                        if !found && !shown && (!self.items.is_empty() || !self.archived.is_empty()) {
                             ui.weak(t("Aucun document trouvé.", "No documents found."));
                         }
                     });
@@ -1992,6 +1997,128 @@ impl Drafts {
             }
         });
         ui.add_space(12.0);
+    }
+
+    /// Archived Facture.net documents of the current page, read-only. Returns whether any was shown.
+    fn archived_section(&mut self, ui: &mut egui::Ui, fr: bool, query: &str) -> bool {
+        let t = |f, e| if fr { f } else { e };
+        let quotes = self.page == Page::Quotes;
+        let rows: Vec<_> = self
+            .archived
+            .iter()
+            .filter(|doc| (doc.kind == "quote") == quotes)
+            .filter(|doc| match self.status_filter {
+                1 => doc.status == "draft",
+                2 => doc.status == "finalized",
+                3 => matches!(doc.status.as_str(), "paid" | "signed"),
+                4 => false,
+                5 => doc.status != "draft",
+                _ => true,
+            })
+            .filter(|doc| {
+                query.is_empty()
+                    || [&doc.number, &doc.recipient, &doc.date]
+                        .iter()
+                        .any(|field| field.to_lowercase().contains(query))
+            })
+            .cloned()
+            .collect();
+        if rows.is_empty() {
+            return false;
+        }
+        crate::brand::section(ui, t("Historique Facture.net", "Facture.net history"));
+        ui.weak(t(
+            "Documents importés, en lecture seule. Ouvrez l’original ou reprenez-le dans un nouveau brouillon.",
+            "Imported documents, read only. Open the original or reuse it in a new draft.",
+        ));
+        let mut reuse = None;
+        for doc in &rows {
+            crate::brand::card(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(&doc.number)
+                            .size(16.0)
+                            .strong()
+                            .color(INK),
+                    );
+                    crate::brand::badge(ui, "Facture.net", Tone::Draft);
+                    let (label, tone) = match doc.status.as_str() {
+                        "paid" => (t("Payée", "Paid"), Tone::Positive),
+                        "signed" => (t("Signé", "Signed"), Tone::Positive),
+                        "rectified" => (t("Rectifiée", "Rectified"), Tone::Closed),
+                        "draft" => (t("Provisoire", "Draft"), Tone::Draft),
+                        _ => (t("Finalisé", "Finalized"), Tone::Sent),
+                    };
+                    crate::brand::badge(ui, label, tone);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            egui::RichText::new(crate::brand::money(&doc.gross, &doc.currency, fr))
+                                .size(16.0)
+                                .strong()
+                                .color(INK),
+                        );
+                    });
+                });
+                let date = if doc.date.len() == 10 && fr {
+                    format!("{}/{}/{}", &doc.date[8..], &doc.date[5..7], &doc.date[..4])
+                } else {
+                    doc.date.clone()
+                };
+                ui.weak(format!(
+                    "{} · {}  ·  {}",
+                    kind_name(doc.kind, fr),
+                    doc.recipient,
+                    date
+                ));
+                ui.horizontal(|ui| {
+                    if let Some(pdf) = &doc.pdf
+                        && ui.button(t("Ouvrir le PDF", "Open PDF")).clicked()
+                    {
+                        let opened = self
+                            .store
+                            .archive_pdf(&doc.source, pdf)
+                            .and_then(|bytes| crate::operations::open_pdf(&bytes));
+                        if let Err(error) = opened {
+                            self.error = Some(error.to_string());
+                        }
+                    }
+                    if matches!(doc.kind, "quote" | "invoice")
+                        && ui
+                            .button(t("Reprendre en brouillon", "Reuse as draft"))
+                            .on_hover_text(t(
+                                "Crée un nouveau brouillon avec le client et les lignes de ce document ; l’original reste inchangé.",
+                                "Creates a new draft with this document's client and lines; the original is unchanged.",
+                            ))
+                            .clicked()
+                    {
+                        reuse = Some(doc.clone());
+                    }
+                });
+            });
+        }
+        if let Some(doc) = reuse {
+            let title = format!("{} {}", t("Reprise de", "Reuse of"), doc.number);
+            let mut defaults = self.new_quote();
+            if doc.kind == "invoice" {
+                defaults.due_date = self.store.date_in_days(30).unwrap_or_default();
+            }
+            match self.store.draft_from_archive(&doc, defaults, &title) {
+                Ok(_) => {
+                    self.refresh();
+                    self.notice = Some(format!(
+                        "{} « {title} ». {}",
+                        t("Brouillon créé :", "Draft created:"),
+                        t(
+                            "Vérifiez les lignes avant de finaliser.",
+                            "Check the lines before finalizing."
+                        )
+                    ));
+                }
+                Err(error) => self.error = Some(error.to_string()),
+            }
+        }
+        true
     }
 
     /// Shows the latest notice or error at the bottom of the window, on every page.

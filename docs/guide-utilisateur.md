@@ -391,6 +391,8 @@ Le **Tableau de bord** est la page d’accueil. Il résume votre activité pour 
 
 ## 11. Archives Facture.net
 
+Vos anciens devis et factures apparaissent aussi en bas des listes **Devis** et **Factures**, dans la section **Historique Facture.net**, avec leur numéro, leur client, leur date, leur montant et leur statut d’origine. Le bouton **Ouvrir le PDF** affiche l’original ; **Reprendre en brouillon** crée un nouveau brouillon avec le même client et les mêmes lignes, que vous vérifiez avant de le finaliser. L’original n’est jamais modifié.
+
 La page **Archives** contient l’historique de vos documents émis avec Facture.net, importé dans FactureCraft. Elle est en **lecture seule** : vous consultez, vous ne modifiez pas.
 
 Vous y trouvez les devis et factures anciens, avec leur numéro, leur date et leurs montants. La barre **Rechercher** permet de filtrer la liste.

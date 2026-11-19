@@ -643,9 +643,18 @@ pub fn render(document: &Document<'_>) -> Result<Vec<u8>> {
             quote.valid_until.trim(),
         ));
     }
+    if invoice {
+        conditions.push(("IBAN :", issuer.iban.trim()));
+    }
     conditions.retain(|(_, value)| !value.is_empty());
     if !conditions.is_empty() || !quote.terms.trim().is_empty() {
-        layout.new_page();
+        // Quotes keep their terms on a page of their own; invoices show how to pay under the totals.
+        if invoice {
+            layout.y += 8.0;
+            layout.ensure(9.0 + LINE * conditions.len() as f64);
+        } else {
+            layout.new_page();
+        }
         layout.heading(t("Conditions", "Terms"));
         for (label, value) in &conditions {
             layout.text(LEFT, 8.5, label, INK, true, Align::Left);
@@ -1071,6 +1080,52 @@ mod tests {
         })
         .unwrap();
         assert_ne!(fr, without);
+    }
+
+    #[test]
+    fn invoice_shows_how_to_pay_on_its_first_page_and_terms_when_asked() {
+        let quote = Quote {
+            recipient: "Client".into(),
+            payment_terms: "À réception".into(),
+            payment_method: "Virement bancaire".into(),
+            lines: vec![QuoteLine {
+                description: "Prestation".into(),
+                price: "100".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let mut issuer = Issuer {
+            name: "Exemple".into(),
+            iban: "FR1420041010050500013M02606".into(),
+            cgv: "1. Objet\nTexte.".into(),
+            ..Default::default()
+        };
+        let pages = |issuer: &Issuer| {
+            let bytes = render(&Document {
+                kind: "invoice",
+                number: Some("F112600001"),
+                date: "2026-11-19",
+                title: "Facture",
+                currency: "EUR",
+                language: "fr",
+                quote: &quote,
+                issuer,
+                logo: None,
+                applied_deposit: None,
+            })
+            .unwrap();
+            (
+                lopdf::Document::load_mem(&bytes).unwrap().get_pages().len(),
+                bytes.len(),
+            )
+        };
+        let (with_iban, size) = pages(&issuer);
+        assert_eq!(with_iban, 1, "payment terms and IBAN stay under the totals");
+        issuer.iban.clear();
+        assert!(pages(&issuer).1 < size, "the IBAN is printed");
+        issuer.cgv_on_invoices = true;
+        assert_eq!(pages(&issuer).0, 2, "general terms get their own page");
     }
 
     #[test]

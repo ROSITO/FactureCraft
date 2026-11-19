@@ -249,6 +249,46 @@ pub fn glass_panel<R>(
         .inner
 }
 
+/// Confirmation shown at the bottom of the window, visible from every page.
+/// `age` is the time since it appeared, in seconds; it fades in and out.
+pub fn toast(ctx: &egui::Context, text: &str, age: f32, lifetime: f32, error: bool) {
+    let opacity = (age / 0.2).min((lifetime - age) / 0.5).clamp(0.0, 1.0);
+    let lift = (1.0 - (age / 0.25).min(1.0)) * 10.0;
+    egui::Area::new(egui::Id::new("toast"))
+        .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -28.0 + lift))
+        .order(egui::Order::Tooltip)
+        .interactable(false)
+        .show(ctx, |ui| {
+            ui.set_opacity(opacity);
+            egui::Frame::new()
+                .fill(if error {
+                    Color32::from_rgba_unmultiplied(150, 32, 44, 240)
+                } else {
+                    with_alpha(deep(), 238)
+                })
+                .stroke(egui::Stroke::new(1.0, Color32::from_white_alpha(40)))
+                .corner_radius(20)
+                .inner_margin(egui::Margin::symmetric(18, 11))
+                .shadow(egui::Shadow {
+                    offset: [0, 8],
+                    blur: 24,
+                    spread: 0,
+                    color: Color32::from_black_alpha(60),
+                })
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        let (mark, color) = if error {
+                            ("⚠", Color32::from_rgb(255, 210, 200))
+                        } else {
+                            ("✔", Color32::from_rgb(140, 220, 150))
+                        };
+                        ui.label(RichText::new(mark).color(color).strong());
+                        ui.label(RichText::new(text).color(Color32::WHITE).size(14.0));
+                    });
+                });
+        });
+}
+
 /// One-line input, taller than egui's default.
 pub fn field(text: &mut dyn egui::TextBuffer) -> egui::TextEdit<'_> {
     egui::TextEdit::singleline(text).margin(egui::Margin::symmetric(12, 9))

@@ -180,6 +180,7 @@ pub fn run(store: Store, language: Option<Language>) -> Result<()> {
                 turn_forward: true,
                 page_turn,
                 payment_reference: String::new(),
+                toast: None,
                 confirm_delete_document: false,
                 confirm_delete_payment: None,
                 confirm_delete_contact: None,
@@ -277,6 +278,8 @@ struct Drafts {
     turn_forward: bool,
     page_turn: bool,
     payment_reference: String,
+    /// Message currently shown as a toast, when it appeared, and whether it is an error.
+    toast: Option<(String, f64, bool)>,
     confirm_delete_document: bool,
     confirm_delete_payment: Option<i64>,
     confirm_delete_contact: Option<i64>,
@@ -646,7 +649,6 @@ impl eframe::App for Drafts {
                     egui::ScrollArea::vertical().id_salt("settings").show(ui, |ui| {
                         self.appearance_settings(ui, fr);
                         self.language_settings(ui, fr);
-                        if let Some(notice) = &self.notice { ui.label(notice); }
                         if let Some(error) = &self.error { ui.colored_label(ui.visuals().error_fg_color, error); }
                         self.issuer_settings(ui, fr);
                         ui.add_space(18.0);
@@ -694,7 +696,10 @@ impl eframe::App for Drafts {
                                         .clicked()
                                     {
                                         match self.store.save_contact(contact) {
-                                            Ok(()) => close = true,
+                                            Ok(()) => {
+                                                close = true;
+                                                self.notice = Some(t("Client enregistré.", "Client saved.").into());
+                                            }
                                             Err(error) => {
                                                 let message = error.to_string();
                                                 self.error = Some(if message == "Contact name must contain 1–200 characters" {
@@ -847,10 +852,12 @@ impl eframe::App for Drafts {
                             }
                             if let Some(id) = delete_contact {
                                 self.confirm_delete_contact = None;
-                                if let Err(error) = self.store.delete_contact(id) {
-                                    self.error = Some(error.to_string());
-                                }
+                                let deleted = self.store.delete_contact(id);
                                 self.refresh();
+                                match deleted {
+                                    Ok(()) => self.notice = Some(t("Client supprimé du carnet.", "Client removed from the address book.").into()),
+                                    Err(error) => self.error = Some(error.to_string()),
+                                }
                             }
                         });
                     return;
@@ -1045,6 +1052,7 @@ impl eframe::App for Drafts {
                                                             self.quote = converted;
                                                             self.currency = target.trim().to_uppercase();
                                                             self.error = None;
+                                                            self.notice = Some(t("Montants convertis. Enregistrez le brouillon pour les conserver.", "Amounts converted. Save the draft to keep them.").into());
                                                             finished = true;
                                                         }
                                                         Err(error) => self.error = Some(error.to_string()),
@@ -1116,7 +1124,10 @@ impl eframe::App for Drafts {
                                             registration: self.quote.recipient_registration.clone(),
                                         };
                                         match self.store.save_contact(&contact) {
-                                            Ok(()) => self.refresh(),
+                                            Ok(()) => {
+                                                self.refresh();
+                                                self.notice = Some(t("Destinataire ajouté au carnet.", "Recipient added to the address book.").into());
+                                            }
                                             Err(error) => self.error = Some(error.to_string()),
                                         }
                                     }
@@ -1326,9 +1337,6 @@ impl eframe::App for Drafts {
                                 });
                         });
                 }
-                if let Some(notice) = &self.notice {
-                    ui.label(notice);
-                }
                 if let Some(error) = &self.error {
                     ui.colored_label(ui.visuals().error_fg_color, error);
                 }
@@ -1492,6 +1500,7 @@ impl eframe::App for Drafts {
                 }
                 });
             });
+        self.show_toast(ctx, now);
         if let Some(id) = self.review {
             if let (Ok(Some(draft)), Ok(quote), Ok(state)) = (
                 self.store.get(id),
@@ -1537,7 +1546,7 @@ impl eframe::App for Drafts {
                             }
                         });
                         if ui.button(t("Affecter", "Apply")).clicked() {
-                            match self.deposit_id.parse::<i64>() { Ok(deposit) => match self.store.allocate_deposit(id, deposit) { Ok(()) => { self.review = None; self.deposit_id.clear(); self.refresh(); }, Err(error) => self.error = Some(error.to_string()) }, Err(_) => self.error = Some(t("Choisissez un acompte.", "Choose a deposit.").into()) }
+                            match self.deposit_id.parse::<i64>() { Ok(deposit) => match self.store.allocate_deposit(id, deposit) { Ok(()) => { self.review = None; self.deposit_id.clear(); self.refresh(); self.notice = Some(t("Acompte affecté à la facture.", "Deposit applied to the invoice.").into()); }, Err(error) => self.error = Some(error.to_string()) }, Err(_) => self.error = Some(t("Choisissez un acompte.", "Choose a deposit.").into()) }
                         }
                     }
                     let finalize_label = if live { t("Finaliser et numéroter", "Finalize and number") } else { t("Finaliser la démonstration", "Finalize demonstration") };
@@ -1596,9 +1605,9 @@ impl eframe::App for Drafts {
                         if state.kind == "quote" && !state.accepted && state.closed.is_none() {
                             ui.horizontal(|ui| { ui.label(t("Date (AAAA-MM-JJ)", "Date (YYYY-MM-DD)")); ui.add(crate::brand::field(&mut self.event_date)); });
                             ui.horizontal(|ui| {
-                                if ui.button(t("Marquer accepté", "Mark accepted")).clicked() { match self.store.accept_quote(id, &self.event_date) { Ok(()) => { self.review = None; self.refresh(); }, Err(error) => self.error = Some(error.to_string()) } }
+                                if ui.button(t("Marquer accepté", "Mark accepted")).clicked() { match self.store.accept_quote(id, &self.event_date) { Ok(()) => { self.review = None; self.refresh(); self.notice = Some(t("Devis marqué accepté.", "Quote marked accepted.").into()); }, Err(error) => self.error = Some(error.to_string()) } }
                                 for (status, label) in [("refused", t("Marquer refusé", "Mark refused")), ("cancelled", t("Marquer annulé", "Mark cancelled"))] {
-                                    if ui.button(label).clicked() { match self.store.close_quote(id, status, &self.event_date) { Ok(()) => { self.review = None; self.refresh(); }, Err(error) => self.error = Some(error.to_string()) } }
+                                    if ui.button(label).clicked() { match self.store.close_quote(id, status, &self.event_date) { Ok(()) => { self.review = None; self.refresh(); self.notice = Some(if status == "refused" { t("Devis marqué refusé.", "Quote marked refused.") } else { t("Devis marqué annulé.", "Quote marked cancelled.") }.into()); }, Err(error) => self.error = Some(error.to_string()) } }
                                 }
                             });
                         }
@@ -1614,7 +1623,7 @@ impl eframe::App for Drafts {
                                         if ui.button(t("Créer la facture", "Create invoice")).clicked() {
                                             let indexes: Vec<usize> = selected.iter().enumerate().filter(|(_, keep)| **keep).map(|(index, _)| index).collect();
                                             match self.store.derive_invoice_with_lines(id, state.version, &indexes, &draft.title) {
-                                                Ok(_) => { self.page = Page::Invoices; self.review = None; done = true; }
+                                                Ok(_) => { self.page = Page::Invoices; self.review = None; done = true; self.notice = Some(t("Brouillon de facture créé dans Factures.", "Invoice draft created in Invoices.").into()); }
                                                 Err(error) => self.error = Some(error.to_string()),
                                             }
                                         }
@@ -1634,7 +1643,7 @@ impl eframe::App for Drafts {
                                         if ui.button(t("Créer l’acompte", "Create deposit")).clicked() {
                                             let share = if *amount { facturecraft_core::billing::Share::Amount(value.clone()) } else { facturecraft_core::billing::Share::Percent(value.clone()) };
                                             match self.store.derive_deposit(id, state.version, &share, &draft.title) {
-                                                Ok(_) => { self.page = Page::Invoices; self.review = None; done = true; }
+                                                Ok(_) => { self.page = Page::Invoices; self.review = None; done = true; self.notice = Some(t("Brouillon d’acompte créé dans Factures.", "Deposit draft created in Invoices.").into()); }
                                                 Err(error) => self.error = Some(error.to_string()),
                                             }
                                         }
@@ -1654,12 +1663,12 @@ impl eframe::App for Drafts {
                             }
                             if done { self.derive_dialog = None; self.refresh(); }
                         }
-                        if state.kind == "invoice" && ui.button(t("Créer un avoir", "Create credit note")).clicked() { match self.store.derive_document_versioned(id, state.version, "credit", &draft.title) { Ok(_) => { self.review = None; self.refresh(); }, Err(error) => self.error = Some(credit_error(error, fr)) } }
+                        if state.kind == "invoice" && ui.button(t("Créer un avoir", "Create credit note")).clicked() { match self.store.derive_document_versioned(id, state.version, "credit", &draft.title) { Ok(_) => { self.review = None; self.refresh(); self.notice = Some(t("Brouillon d’avoir créé.", "Credit note draft created.").into()); }, Err(error) => self.error = Some(credit_error(error, fr)) } }
                         if matches!(state.kind.as_str(), "invoice" | "deposit") {
                             ui.label(format!("{}: {} · {}: {} · {}: {} · {}: {}", t("Acomptes", "Deposits"), state.deposits, t("Réglé", "Paid"), state.paid, t("Avoirs", "Credits"), state.credited, t("Reste à payer", "Outstanding"), state.outstanding));
                             ui.horizontal_wrapped(|ui| { ui.label(t("Montant", "Amount")); ui.add(crate::brand::field(&mut self.payment_amount).desired_width(110.0)); ui.label(t("Date AAAA-MM-JJ", "Date YYYY-MM-DD")); ui.add(crate::brand::field(&mut self.event_date).desired_width(120.0)); });
                             ui.horizontal(|ui| { ui.label(t("Mode", "Method")); ui.add(crate::brand::field(&mut self.payment_method)); ui.label(t("Référence", "Reference")); ui.add(crate::brand::field(&mut self.payment_reference)); });
-                            if ui.button(t("Enregistrer le règlement", "Record payment")).clicked() { match self.store.record_payment(id, &self.payment_amount, &self.event_date, &self.payment_method, &self.payment_reference) { Ok(()) => { self.payment_amount.clear(); self.payment_reference.clear(); self.error = None; self.refresh(); }, Err(error) => self.error = Some(error.to_string()) } }
+                            if ui.button(t("Enregistrer le règlement", "Record payment")).clicked() { match self.store.record_payment(id, &self.payment_amount, &self.event_date, &self.payment_method, &self.payment_reference) { Ok(()) => { self.payment_amount.clear(); self.payment_reference.clear(); self.error = None; self.refresh(); self.notice = Some(t("Règlement enregistré.", "Payment recorded.").into()); }, Err(error) => self.error = Some(error.to_string()) } }
                             let payments = self.store.payments(id).unwrap_or_default();
                             if !payments.is_empty() {
                                 crate::brand::section(ui, t("Règlements reçus", "Payments received"));
@@ -1669,7 +1678,7 @@ impl eframe::App for Drafts {
                                     ui.label(format!("{} · {} · {}{}", payment.date, crate::brand::money(&payment.amount, &draft.currency, fr), payment.method, if payment.reference.is_empty() { String::new() } else { format!(" · {}", payment.reference) }));
                                     if self.confirm_delete_payment == Some(payment.id) {
                                         if ui.button(egui::RichText::new(t("Confirmer", "Confirm")).color(ui.visuals().error_fg_color)).clicked() {
-                                            match self.store.delete_payment(payment.id) { Ok(()) => { self.confirm_delete_payment = None; self.refresh(); }, Err(error) => self.error = Some(error.to_string()) }
+                                            match self.store.delete_payment(payment.id) { Ok(()) => { self.confirm_delete_payment = None; self.refresh(); self.notice = Some(t("Règlement annulé.", "Payment removed.").into()); }, Err(error) => self.error = Some(error.to_string()) }
                                         }
                                     } else if ui.small_button(t("Annuler ce règlement", "Remove this payment")).clicked() {
                                         self.confirm_delete_payment = Some(payment.id);
@@ -1819,7 +1828,11 @@ impl Drafts {
                             );
                         } else {
                             match self.store.save_product(product) {
-                                Ok(_) => close = true,
+                                Ok(_) => {
+                                    close = true;
+                                    self.notice =
+                                        Some(t("Produit enregistré.", "Product saved.").into());
+                                }
                                 Err(error) => self.error = Some(error.to_string()),
                             }
                         }
@@ -1917,10 +1930,12 @@ impl Drafts {
             });
         if let Some(id) = delete {
             self.confirm_delete_product = None;
-            if let Err(error) = self.store.delete_product(id) {
-                self.error = Some(error.to_string());
-            }
+            let deleted = self.store.delete_product(id);
             self.refresh();
+            match deleted {
+                Ok(()) => self.notice = Some(t("Produit supprimé.", "Product deleted.").into()),
+                Err(error) => self.error = Some(error.to_string()),
+            }
         }
     }
 
@@ -1977,6 +1992,32 @@ impl Drafts {
             }
         });
         ui.add_space(12.0);
+    }
+
+    /// Shows the latest notice or error at the bottom of the window, on every page.
+    fn show_toast(&mut self, ctx: &egui::Context, now: f64) {
+        let current = self
+            .notice
+            .clone()
+            .map(|text| (text, false))
+            .or_else(|| self.error.clone().map(|text| (text, true)));
+        match (&current, &self.toast) {
+            (Some((text, error)), Some((shown, _, shown_error)))
+                if text == shown && error == shown_error => {}
+            (Some((text, error)), _) => self.toast = Some((text.clone(), now, *error)),
+            (None, _) => self.toast = None,
+        }
+        if let Some((text, since, error)) = &self.toast {
+            let lifetime = if *error { 6.0 } else { 3.0 };
+            let age = (now - since) as f32;
+            if age < lifetime {
+                crate::brand::toast(ctx, text, age, lifetime, *error);
+                ctx.request_repaint();
+            } else if !*error {
+                // A confirmation is consumed once shown; errors stay inline until resolved.
+                self.notice = None;
+            }
+        }
     }
 
     fn apply_theme(&mut self, ctx: &egui::Context, id: &str) {
@@ -2141,7 +2182,10 @@ impl Drafts {
                             && ui.button(t("Retirer le logo", "Remove logo")).clicked()
                         {
                             match self.store.clear_logo() {
-                                Ok(()) => self.logo_texture = None,
+                                Ok(()) => {
+                                    self.logo_texture = None;
+                                    self.notice = Some(t("Logo retiré.", "Logo removed.").into());
+                                }
                                 Err(error) => self.error = Some(error.to_string()),
                             }
                         }
@@ -2349,7 +2393,13 @@ impl Drafts {
             {
                 match self.store.disable_live_numbering() {
                     Ok(()) => {
-                        self.notice = None;
+                        self.notice = Some(
+                            t(
+                                "Retour au mode démonstration.",
+                                "Back to demonstration mode.",
+                            )
+                            .into(),
+                        );
                         self.error = None;
                         self.refresh();
                     }

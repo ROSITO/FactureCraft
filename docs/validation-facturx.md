@@ -1,4 +1,4 @@
-# Validation indépendante Factur-X — 18 novembre 2026
+# Validation indépendante Factur-X — 18 et 19 novembre 2026
 
 Sept scénarios synthétiques, produits par le générateur XML et le moteur PDF de l’application, ont été contrôlés localement avec Mustang CLI 2.26.0 (veraPDF embarqué). Aucun export ni document client n’a été envoyé à un service.
 
@@ -12,9 +12,9 @@ Les sept conteneurs Factur-X, leurs PDF/A-3B et leurs XML EN16931 ont un résult
 | Remise par ligne et remise globale | 8 246 | 95 | 0 |
 | Facture d’acompte | 7 781 | 53 | 0 |
 | Facture avec acompte déduit et référence | 7 871 | 56 | 0 |
-| Avoir avec référence à la facture | 7 688 | 55 | 3 |
+| Avoir avec référence à la facture | 7 739 | 55 | 0 |
 
-L’avoir reçoit trois avertissements BR-FR-05 : absence des notes PMT, PMD et AAB. Son XML et le conteneur restent valides. Le générateur n’ajoute actuellement pas de clauses de retard, recouvrement ou escompte à un avoir ; cette décision métier reste à revoir avant d’affirmer une conformité aux exigences d’une plateforme française. Le compteur `rules_failed=3` de ce cas correspond à ces avertissements, pas à trois erreurs bloquantes.
+Le 18 novembre, l’avoir recevait trois avertissements BR-FR-05 (notes PMT, PMD et AAB absentes). Depuis le 19 novembre, l’avoir porte les mêmes mentions de pénalités de retard, d’indemnité forfaitaire de recouvrement et d’escompte que les factures, dans le XML et sur le PDF. La matrice complète a été régénérée et revalidée le 19 novembre avec le même Mustang CLI 2.26.0 : les sept cas sont valides, sans aucun avertissement.
 
 Cette campagne couvre ces jeux de données seulement. Elle ne constitue pas une certification de tous les documents possibles, ni une validation des obligations de transmission à une plateforme française. Les autres devises, moyens de paiement, taux et motifs d’exonération, très longs documents et logos ne sont pas couverts par cette campagne indépendante.
 

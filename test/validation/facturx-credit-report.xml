@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
-<validation filename="credit.pdf" datetime="2026-11-18 21:16:20">
-  <pdf>ValidationResult [flavour=3b, totalAssertions=7688, assertions=[], isCompliant=true]
+<validation filename="credit.pdf" datetime="2026-11-19 10:34:30">
+  <pdf>ValidationResult [flavour=3b, totalAssertions=7739, assertions=[], isCompliant=true]
     <info>
       <signature>unknown</signature>
-      <duration unit="ms">906</duration>
+      <duration unit="ms">682</duration>
     </info>
     <summary status="valid"/>
-  </pdf>
+  </pdf>  
   <xml>
     <info>
       <version>2</version>
@@ -15,17 +15,12 @@
       <validator version="2.26.0"/>
       <rules>
         <fired>55</fired>
-        <failed>3</failed>
+        <failed>0</failed>
       </rules>
-      <duration unit="ms">1557</duration>
+      <duration unit="ms">911</duration>
     </info>
-    <messages>
-      <warning type="4" location="/*:CrossIndustryInvoice[namespace-uri()='urn:un:unece:uncefact:data:standard:CrossIndustryInvoice:100'][1]/*:ExchangedDocument[namespace-uri()='urn:un:unece:uncefact:data:standard:CrossIndustryInvoice:100'][1]" criterion="exists($notes[ram:SubjectCode = 'PMT'])">BR-FR-05/BT-22 : La mention relative aux frais de recouvrement (code PMT) est absente. Elle est obligatoire dans les notes (BG-1). [ID BR-FR-05_BT-22_PMT] from /xslt/XP_Z12_012/20260216_BR-FR-Flux2-Schematron-CII_V1.3.0.xsl)</warning>
-      <warning type="4" location="/*:CrossIndustryInvoice[namespace-uri()='urn:un:unece:uncefact:data:standard:CrossIndustryInvoice:100'][1]/*:ExchangedDocument[namespace-uri()='urn:un:unece:uncefact:data:standard:CrossIndustryInvoice:100'][1]" criterion="exists($notes[ram:SubjectCode = 'PMD'])">BR-FR-05/BT-22 : La mention relative aux pénalités de retard (code PMD) est absente. Elle est obligatoire dans les notes (BG-1). [ID BR-FR-05_BT-22_PMD] from /xslt/XP_Z12_012/20260216_BR-FR-Flux2-Schematron-CII_V1.3.0.xsl)</warning>
-      <warning type="4" location="/*:CrossIndustryInvoice[namespace-uri()='urn:un:unece:uncefact:data:standard:CrossIndustryInvoice:100'][1]/*:ExchangedDocument[namespace-uri()='urn:un:unece:uncefact:data:standard:CrossIndustryInvoice:100'][1]" criterion="exists($notes[ram:SubjectCode = 'AAB'])">BR-FR-05/BT-22 : La mention relative à l’escompte ou à son absence (code AAB) est absente. Elle est obligatoire dans les notes (BG-1). [ID BR-FR-05_BT-22_AAB] from /xslt/XP_Z12_012/20260216_BR-FR-Flux2-Schematron-CII_V1.3.0.xsl)</warning>
-    </messages>
     <summary status="valid"/>
   </xml>
-  <messages></messages>
   <summary status="valid"/>
 </validation>
+

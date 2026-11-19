@@ -198,11 +198,10 @@ pub fn cii_xml(invoice: &Invoice<'_>) -> Result<String> {
         };
         note(&format!("{label} : {service_date}"), None);
     }
-    if invoice.kind != "credit" {
-        note(issuer.late_penalties(invoice.language), Some("PMD"));
-        note(issuer.late_penalties(invoice.language), Some("PMT"));
-        note(issuer.late_penalties(invoice.language), Some("AAB"));
-    }
+    // French rule BR-FR-05 expects these notes on every invoice type, credit notes included.
+    note(issuer.late_penalties(invoice.language), Some("PMD"));
+    note(issuer.late_penalties(invoice.language), Some("PMT"));
+    note(issuer.late_penalties(invoice.language), Some("AAB"));
     x.push_str("</rsm:ExchangedDocument>\n<rsm:SupplyChainTradeTransaction>\n");
 
     // BG-25 invoice lines.
@@ -1165,6 +1164,12 @@ mod tests {
             number
         );
         assert!(!credit_xml.contains("TotalPrepaidAmount"));
+        for code in ["PMD", "PMT", "AAB"] {
+            assert!(
+                credit_xml.contains(&format!("<ram:SubjectCode>{code}</ram:SubjectCode>")),
+                "credit note carries the {code} note"
+            );
+        }
         assert_eq!(value(&credit_xml, "ram:DuePayableAmount"), "120.00");
         Ok(())
     }

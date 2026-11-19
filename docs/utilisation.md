@@ -71,7 +71,7 @@ Mise en forme, valable dans les descriptions, les conditions et les CGV :
 
 ## Factures : mentions obligatoires
 
-Une facture ou un acompte ne se finalise qu’avec une date d’échéance (AAAA-MM-JJ). Une facture créée depuis un devis reçoit par défaut une échéance à 30 jours, modifiable. La date de prestation est facultative. Les deux s’impriment sous la date du document. La mention des pénalités de retard et de l’indemnité forfaitaire de 40 € s’imprime automatiquement sous les totaux. Son texte se personnalise dans Paramètres. Les CGV peuvent aussi s’imprimer sur les factures (option dans Paramètres).
+Une facture ou un acompte ne se finalise qu’avec une date d’échéance (AAAA-MM-JJ). Une facture créée depuis un devis reçoit par défaut une échéance à 30 jours, modifiable. La date de prestation est facultative. Les deux s’impriment sous la date du document. La mention des pénalités de retard et de l’indemnité forfaitaire de 40 € s’imprime automatiquement sous les totaux des factures, des acomptes et des avoirs, et figure aussi dans leur Factur-X. Son texte se personnalise dans Paramètres. Les CGV peuvent aussi s’imprimer sur les factures (option dans Paramètres).
 
 ## Gérer les documents et les clients
 

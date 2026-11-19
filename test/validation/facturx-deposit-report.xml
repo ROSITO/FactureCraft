@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
-<validation filename="deposit.pdf" datetime="2026-11-18 21:16:18">
+<validation filename="deposit.pdf" datetime="2026-11-19 10:34:27">
   <pdf>ValidationResult [flavour=3b, totalAssertions=7781, assertions=[], isCompliant=true]
     <info>
       <signature>unknown</signature>
-      <duration unit="ms">1100</duration>
+      <duration unit="ms">799</duration>
     </info>
     <summary status="valid"/>
-  </pdf>
+  </pdf>  
   <xml>
     <info>
       <version>2</version>
@@ -17,9 +17,10 @@
         <fired>53</fired>
         <failed>0</failed>
       </rules>
-      <duration unit="ms">1515</duration>
+      <duration unit="ms">842</duration>
     </info>
     <summary status="valid"/>
   </xml>
   <summary status="valid"/>
 </validation>
+

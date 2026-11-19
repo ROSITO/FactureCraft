@@ -615,8 +615,9 @@ pub fn render(document: &Document<'_>) -> Result<Vec<u8>> {
         layout.text(RIGHT, 7.5, &line, LABEL, false, Align::Right);
         layout.y += 4.0;
     }
-    if invoice {
+    if invoice || document.kind == "credit" {
         // Mandatory on B2B invoices: late-payment penalties and recovery indemnity.
+        // Credit notes repeat it so the printed text matches their Factur-X notes.
         layout.y += 3.0;
         for line in layout.wrap(issuer.late_penalties(document.language), 7.5, RIGHT - LEFT) {
             layout.ensure(3.6);

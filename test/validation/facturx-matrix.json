@@ -1,12 +1,12 @@
 {
   "validator": "Mustang CLI 2.26.0 (bundled veraPDF)",
-  "date": "2026-11-18",
+  "date": "2026-11-19",
   "synthetic_only": true,
   "cases": [
     {
       "case": "invoice",
       "pdfa": "valid",
-      "pdfa_details": "ValidationResult [flavour=3b, totalAssertions=7625, assertions=[], isCompliant=true]",
+      "pdfa_details": "ValidationResult [flavour=3b, totalAssertions=7625, assertions=[]",
       "xml": "valid",
       "rules_fired": 53,
       "rules_failed": 0,
@@ -14,13 +14,13 @@
       "warnings": [],
       "sha256": {
         "xml": "9002c03480c628c6f37afc13cb1c7d8f36218e1571cd94632a88ddef590a4f1c",
-        "pdf": "1ab5061f7d87f1e0260b86cdf69caeb471e845f9cdbcedb22a51fc7d7c5b8ff0"
+        "pdf": "c938b7eb1a2e4bbc26a9c97e843defd81f5a04c5619901d94ade03d08b9e9640"
       }
     },
     {
       "case": "taxed",
       "pdfa": "valid",
-      "pdfa_details": "ValidationResult [flavour=3b, totalAssertions=7781, assertions=[], isCompliant=true]",
+      "pdfa_details": "ValidationResult [flavour=3b, totalAssertions=7781, assertions=[]",
       "xml": "valid",
       "rules_fired": 53,
       "rules_failed": 0,
@@ -28,13 +28,13 @@
       "warnings": [],
       "sha256": {
         "xml": "1f94e1089aa2241af029d1ebd8628cde68010906a8dc1d6bacc0b720b5a02f02",
-        "pdf": "3b29800cfff8a93eeec4f5b553ca09a7ea889a7a1d1618f535cd2f87123b8815"
+        "pdf": "25cdea570fdf2db6e0ef2381f3611bd71a9a07bc1a08cda4bc270f5b839be14b"
       }
     },
     {
       "case": "mixed",
       "pdfa": "valid",
-      "pdfa_details": "ValidationResult [flavour=3b, totalAssertions=8075, assertions=[], isCompliant=true]",
+      "pdfa_details": "ValidationResult [flavour=3b, totalAssertions=8075, assertions=[]",
       "xml": "valid",
       "rules_fired": 81,
       "rules_failed": 0,
@@ -42,13 +42,13 @@
       "warnings": [],
       "sha256": {
         "xml": "fe3a675700d4416c1520e95fbd21bd209b4bf0f8ce97041d09a5fb1a209039bd",
-        "pdf": "e5b0a4b5ba5151e4bf7235ea2df603896a0af68e9fee160bbc3f5f8fb3f75edd"
+        "pdf": "2a77715a9b51fbb910e7e42a2c5c49803d8160c811d9efd8d698ecd52bc28263"
       }
     },
     {
       "case": "discount",
       "pdfa": "valid",
-      "pdfa_details": "ValidationResult [flavour=3b, totalAssertions=8246, assertions=[], isCompliant=true]",
+      "pdfa_details": "ValidationResult [flavour=3b, totalAssertions=8246, assertions=[]",
       "xml": "valid",
       "rules_fired": 95,
       "rules_failed": 0,
@@ -56,13 +56,13 @@
       "warnings": [],
       "sha256": {
         "xml": "1670d2abf64f1ba55c78f1a53cfece14744061744215ed7e0cd1452694e51dc4",
-        "pdf": "8fc5cbf7b5d64db77cc2021f5a6bb71bd4171422d58d03e0d80ff2954d79fb4a"
+        "pdf": "ef57e0f4ea6113c09015af0f7d7768f197f4dceb5fe628256503678a72e998b1"
       }
     },
     {
       "case": "deposit",
       "pdfa": "valid",
-      "pdfa_details": "ValidationResult [flavour=3b, totalAssertions=7781, assertions=[], isCompliant=true]",
+      "pdfa_details": "ValidationResult [flavour=3b, totalAssertions=7781, assertions=[]",
       "xml": "valid",
       "rules_fired": 53,
       "rules_failed": 0,
@@ -70,13 +70,13 @@
       "warnings": [],
       "sha256": {
         "xml": "12559794d3ab03db2aa230fce262bdff6daabf029c519c85819f81e1ac6b2fb1",
-        "pdf": "d7e36701f824bba81cb674701dcd2d02fb5446f6e3fa2beae3dd6801035bcfc7"
+        "pdf": "6c54615dcb71b0a9db02aff9d032b3c73dcc26bc38ff40eec0b7966630b0d99a"
       }
     },
     {
       "case": "balance",
       "pdfa": "valid",
-      "pdfa_details": "ValidationResult [flavour=3b, totalAssertions=7871, assertions=[], isCompliant=true]",
+      "pdfa_details": "ValidationResult [flavour=3b, totalAssertions=7871, assertions=[]",
       "xml": "valid",
       "rules_fired": 56,
       "rules_failed": 0,
@@ -84,25 +84,21 @@
       "warnings": [],
       "sha256": {
         "xml": "5c1575cec4532b8b32fcdfafac53f641fe6644833d2c8c90b6f9779a2a9f257e",
-        "pdf": "dad55a4e13d6c2326ad96d6c5afb17aafa02ff1205985f096a0adfac71be58bd"
+        "pdf": "08033af2a87be0102ed9a2ae9f58be5228969bcc330c5a27ccdf01c1d355eaeb"
       }
     },
     {
       "case": "credit",
       "pdfa": "valid",
-      "pdfa_details": "ValidationResult [flavour=3b, totalAssertions=7688, assertions=[], isCompliant=true]",
+      "pdfa_details": "ValidationResult [flavour=3b, totalAssertions=7739, assertions=[]",
       "xml": "valid",
       "rules_fired": 55,
-      "rules_failed": 3,
+      "rules_failed": 0,
       "overall": "valid",
-      "warnings": [
-        "BR-FR-05/BT-22 : La mention relative aux frais de recouvrement (code PMT) est absente. Elle est obligatoire dans les notes (BG-1). [ID BR-FR-05_BT-22_PMT] from /xslt/XP_Z12_012/20260216_BR-FR-Flux2-Schematron-CII_V1.3.0.xsl)",
-        "BR-FR-05/BT-22 : La mention relative aux p\u00e9nalit\u00e9s de retard (code PMD) est absente. Elle est obligatoire dans les notes (BG-1). [ID BR-FR-05_BT-22_PMD] from /xslt/XP_Z12_012/20260216_BR-FR-Flux2-Schematron-CII_V1.3.0.xsl)",
-        "BR-FR-05/BT-22 : La mention relative \u00e0 l\u2019escompte ou \u00e0 son absence (code AAB) est absente. Elle est obligatoire dans les notes (BG-1). [ID BR-FR-05_BT-22_AAB] from /xslt/XP_Z12_012/20260216_BR-FR-Flux2-Schematron-CII_V1.3.0.xsl)"
-      ],
+      "warnings": [],
       "sha256": {
-        "xml": "152bfe331a19a7cbf9cd3bc10cfb23d4dccf6cf9516f8c1cf818234b21ccb5dc",
-        "pdf": "0926546b6677b8d3f7c21f1aebe17f9567cbe5d3ddfa433d473a547637266103"
+        "xml": "965eb701529945b08aa2de038881b2ffe9b8b680ac36906b5adbffd9349cd8d5",
+        "pdf": "39e90d26dede72d20f82be184d949721f22b682f028678f52089d12759997838"
       }
     }
   ]

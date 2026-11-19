@@ -137,3 +137,5 @@ pub mod documents;
 pub mod dashboard;
 
 pub mod facturx;
+
+pub mod reconciliation;

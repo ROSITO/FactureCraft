@@ -10,6 +10,7 @@ pub enum Action {
 pub fn show(ui: &mut egui::Ui, data: &Dashboard, fr: bool) -> Option<Action> {
     let t = |f: &'static str, e: &'static str| if fr { f } else { e };
     let mut action = None;
+    let narrow = ui.available_width() < 600.0;
     brand::page_header(
         ui,
         t("Tableau de bord", "Dashboard"),
@@ -19,19 +20,27 @@ pub fn show(ui: &mut egui::Ui, data: &Dashboard, fr: bool) -> Option<Action> {
         ),
         |ui| {
             if ui
-                .button("▶")
-                .on_hover_text(t("Année suivante", "Next year"))
+                .button(if narrow { "◀" } else { "▶" })
+                .on_hover_text(if narrow {
+                    t("Année précédente", "Previous year")
+                } else {
+                    t("Année suivante", "Next year")
+                })
                 .clicked()
             {
-                action = Some(Action::Year(data.year + 1));
+                action = Some(Action::Year(data.year + if narrow { -1 } else { 1 }));
             }
             ui.label(RichText::new(data.year.to_string()).size(18.0).strong());
             if ui
-                .button("◀")
-                .on_hover_text(t("Année précédente", "Previous year"))
+                .button(if narrow { "▶" } else { "◀" })
+                .on_hover_text(if narrow {
+                    t("Année suivante", "Next year")
+                } else {
+                    t("Année précédente", "Previous year")
+                })
                 .clicked()
             {
-                action = Some(Action::Year(data.year - 1));
+                action = Some(Action::Year(data.year + if narrow { 1 } else { -1 }));
             }
             if data.currencies.len() > 1 {
                 egui::ComboBox::from_id_salt("dashboard_currency")

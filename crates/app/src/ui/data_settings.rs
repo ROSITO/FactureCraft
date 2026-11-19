@@ -4,11 +4,171 @@ use crate::operations;
 use eframe::egui;
 use std::path::{Path, PathBuf};
 
+pub(super) struct ImportPreview {
+    batch: facturecraft_core::import::Batch,
+    folder: PathBuf,
+    source: String,
+}
+
+fn import_counts(
+    ui: &mut egui::Ui,
+    report: &facturecraft_core::import::Report,
+    fr: bool,
+    applied: bool,
+) {
+    let t = |f, e| if fr { f } else { e };
+    for (key, fr_label, en_label) in [
+        ("clients", "Clients", "Individuals"),
+        ("companies", "Sociétés", "Companies"),
+        ("quotations", "Devis", "Quotes"),
+        ("invoices", "Factures et acomptes", "Invoices and deposits"),
+    ] {
+        ui.label(format!(
+            "{} : {}",
+            t(fr_label, en_label),
+            report.records_by_category.get(key).copied().unwrap_or(0)
+        ));
+    }
+    ui.label(format!(
+        "{} : {} · {} : {} · {} : {}",
+        t("PDF", "PDFs"),
+        report.pdfs,
+        t("associés", "linked"),
+        report.linked_pdfs,
+        t("non associés", "unlinked"),
+        report.unlinked_pdfs
+    ));
+    if applied {
+        ui.label(format!(
+            "{} : {} · {} : {} · {} : {}",
+            t("Ajoutés", "Inserted"),
+            report.inserted,
+            t("Inchangés", "Unchanged"),
+            report.unchanged,
+            t("Conflits", "Conflicts"),
+            report.conflicts
+        ));
+    }
+}
+
 impl Drafts {
     pub(super) fn data_settings(&mut self, ui: &mut egui::Ui, fr: bool) {
         let t = |f, e| if fr { f } else { e };
         let today = self.store.today().unwrap_or_default();
         let database = self.store.path();
+        crate::brand::section(
+            ui,
+            t(
+                "Importer les données Facture.net",
+                "Import Facture.net data",
+            ),
+        );
+        crate::brand::card(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.label(t(
+                "Choisissez le dossier racine de l’export et donnez un nom stable à cette source. L’analyse ne modifie pas la base.",
+                "Choose the export root folder and give this source a stable name. Analysis does not change the database.",
+            ));
+            if self.import_preview.is_none() {
+                ui.label(t("Nom de la source", "Source name"));
+                ui.add(
+                    crate::brand::field(&mut self.import_source)
+                        .hint_text(t("Ex. export initial", "E.g. initial export")),
+                );
+                if ui
+                    .button(t(
+                        "Choisir et analyser le dossier…",
+                        "Choose and analyze folder…",
+                    ))
+                    .clicked()
+                {
+                    if self.import_source.trim().is_empty() {
+                        self.import_error = Some(
+                            t(
+                                "Indiquez un nom de source avant de choisir le dossier.",
+                                "Enter a source name before choosing a folder.",
+                            )
+                            .into(),
+                        );
+                    } else if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                        self.import_result = None;
+                        match facturecraft_core::import::Batch::load(&folder) {
+                            Ok(batch) => {
+                                self.import_preview = Some(ImportPreview {
+                                    batch,
+                                    folder,
+                                    source: self.import_source.trim().to_owned(),
+                                });
+                                self.import_error = None;
+                            }
+                            Err(error) => {
+                                self.import_error = Some(format!(
+                                    "{} {error:#}",
+                                    t("Analyse impossible :", "Analysis failed:")
+                                ))
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some(preview) = &self.import_preview {
+                ui.strong(t("Analyse avant import", "Pre-import analysis"));
+                ui.label(format!("{} : {}", t("Source", "Source"), preview.source));
+                ui.label(format!(
+                    "{} : {}",
+                    t("Dossier", "Folder"),
+                    preview.folder.display()
+                ));
+                import_counts(ui, preview.batch.report(), fr, false);
+                ui.weak(t("Les fichiers non associés restent dans l’archive. Les paiements source peuvent être incomplets ; vérifiez les soldes. Les lignes et liens entre documents peuvent nécessiter un rapprochement manuel.", "Unlinked files remain in the archive. Source payments may be incomplete; check balances. Lines and document relationships may need manual reconciliation."));
+                ui.weak(t("Les doublons et conflits avec la base seront comptés lors de l’import. Les données existantes en conflit ne seront pas remplacées.", "Duplicates and conflicts with the database are counted during import. Existing conflicting data will not be replaced."));
+                let mut apply = false;
+                let mut cancel = false;
+                ui.horizontal_wrapped(|ui| {
+                    apply = ui
+                        .add(crate::brand::primary(t(
+                            "Importer ce lot",
+                            "Import this batch",
+                        )))
+                        .clicked();
+                    cancel = ui
+                        .button(t("Annuler l’analyse", "Cancel analysis"))
+                        .clicked();
+                });
+                if cancel {
+                    self.import_preview = None;
+                    self.import_error = None;
+                }
+                if apply && let Some(preview) = self.import_preview.take() {
+                    match preview.batch.apply(&mut self.store, &preview.source) {
+                        Ok(report) => {
+                            self.import_result = Some(report);
+                            self.import_error = None;
+                            self.client_detail = None;
+                            self.refresh();
+                        }
+                        Err(error) => {
+                            self.import_error = Some(format!(
+                                "{} {error:#}",
+                                t(
+                                    "Import impossible ; relancez l’analyse :",
+                                    "Import failed; analyze the folder again:"
+                                )
+                            ))
+                        }
+                    }
+                }
+            }
+            if let Some(error) = &self.import_error {
+                ui.colored_label(ui.visuals().error_fg_color, error);
+            }
+            if let Some(report) = &self.import_result {
+                ui.separator();
+                ui.strong(t("Bilan de l’import", "Import reconciliation"));
+                import_counts(ui, report, fr, true);
+                ui.weak(t("Les conflits n’ont pas été remplacés. Vérifiez les PDF non associés, les paiements et les liens entre documents dans les archives.", "Conflicts were not replaced. Review unlinked PDFs, payments and document relationships in the archive."));
+            }
+        });
         crate::brand::section(ui, t("Sauvegarde et restauration", "Backup and restore"));
         crate::brand::card(ui, |ui| {
             ui.set_min_width(ui.available_width());

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<validation filename="balance.pdf" datetime="2026-11-18 21:16:18">
+  <pdf>ValidationResult [flavour=3b, totalAssertions=7871, assertions=[], isCompliant=true]
+    <info>
+      <signature>unknown</signature>
+      <duration unit="ms">1188</duration>
+    </info>
+    <summary status="valid"/>
+  </pdf>
+  <xml>
+    <info>
+      <version>2</version>
+      <profile>urn:cen.eu:en16931:2017</profile>
+      <validator version="2.26.0"/>
+      <rules>
+        <fired>56</fired>
+        <failed>0</failed>
+      </rules>
+      <duration unit="ms">1458</duration>
+    </info>
+    <summary status="valid"/>
+  </xml>
+  <summary status="valid"/>
+</validation>

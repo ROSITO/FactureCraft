@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<validation filename="mixed.pdf" datetime="2026-11-18 21:16:15">
+  <pdf>ValidationResult [flavour=3b, totalAssertions=8075, assertions=[], isCompliant=true]
+    <info>
+      <signature>unknown</signature>
+      <duration unit="ms">1121</duration>
+    </info>
+    <summary status="valid"/>
+  </pdf>
+  <xml>
+    <info>
+      <version>2</version>
+      <profile>urn:cen.eu:en16931:2017</profile>
+      <validator version="2.26.0"/>
+      <rules>
+        <fired>81</fired>
+        <failed>0</failed>
+      </rules>
+      <duration unit="ms">1483</duration>
+    </info>
+    <summary status="valid"/>
+  </xml>
+  <summary status="valid"/>
+</validation>

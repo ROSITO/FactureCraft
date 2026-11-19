@@ -20,13 +20,16 @@ jobs:
       - name: Build portable distribution
         if: github.event_name == 'workflow_dispatch'
         run: cargo build --package facturecraft --release --locked
-      - name: Package macOS or Linux binary
-        if: github.event_name == 'workflow_dispatch' && runner.os != 'Windows'
+      - name: Package macOS application
+        if: github.event_name == 'workflow_dispatch' && runner.os == 'macOS'
+        run: scripts/package-macos.sh
+      - name: Package Linux binary
+        if: github.event_name == 'workflow_dispatch' && runner.os == 'Linux'
         shell: bash
         run: |
           target/release/facturecraft --version
           mkdir -p distribution/facturecraft
-          cp target/release/facturecraft docs/utilisation.md assets/fonts/*OFL.txt distribution/facturecraft/
+          cp target/release/facturecraft docs/utilisation.md docs/guide-utilisateur.md assets/fonts/*OFL.txt distribution/facturecraft/
           tar -czf "distribution/facturecraft-${RUNNER_OS}-${RUNNER_ARCH}.tar.gz" -C distribution facturecraft
       - name: Package Windows binary
         if: github.event_name == 'workflow_dispatch' && runner.os == 'Windows'
@@ -35,7 +38,7 @@ jobs:
           ./target/release/facturecraft.exe --version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           New-Item -ItemType Directory -Path distribution/facturecraft
-          Copy-Item -Path target/release/facturecraft.exe,docs/utilisation.md,assets/fonts/*OFL.txt -Destination distribution/facturecraft
+          Copy-Item -Path target/release/facturecraft.exe,docs/utilisation.md,docs/guide-utilisateur.md,assets/fonts/*OFL.txt -Destination distribution/facturecraft
           Compress-Archive -Path distribution/facturecraft -DestinationPath "distribution/facturecraft-Windows-${env:RUNNER_ARCH}.zip"
       - name: Upload portable distribution to the workflow run
         if: github.event_name == 'workflow_dispatch'

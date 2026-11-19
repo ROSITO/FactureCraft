@@ -2,6 +2,12 @@
 
 Lancer le fichier `facturecraft` ou `facturecraft.exe` ouvre l’interface sur le tableau de bord. L’application, la CLI et le serveur MCP partagent la base locale. L’option globale `--db` ou la variable `FACTURECRAFT_DB` permet de choisir une autre base, notamment pour un essai.
 
+## Installer et mettre à jour la version portable
+
+Téléchargez l’archive correspondant à votre système et à son architecture depuis une source FactureCraft de confiance, puis décompressez-la dans un dossier de votre choix. Sur macOS, copiez `FactureCraft.app` dans Applications puis ouvrez-la. Sous Windows, lancez `facturecraft.exe` ; sous Linux, lancez `facturecraft` et, si nécessaire, rendez-le exécutable avec `chmod +x facturecraft`. Windows et Linux sont livrés en version portable, sans installateur. Les archives actuelles ne sont pas signées ; le système peut afficher un avertissement de sécurité.
+
+Pour une mise à jour, créez d’abord une sauvegarde depuis Paramètres, quittez l’application, puis remplacez l’application macOS ou le binaire Windows/Linux par celui de la nouvelle archive. La base est stockée séparément du binaire ; ne supprimez pas votre dossier de données. Vérifiez le fonctionnement avant de supprimer l’ancienne version. Il n’y a pas de mise à jour automatique. Une ancienne version peut refuser une base ouverte par une version plus récente : conservez la sauvegarde faite avant la mise à jour si un retour arrière est nécessaire.
+
 ## Préparer et consulter un devis
 
 ```console

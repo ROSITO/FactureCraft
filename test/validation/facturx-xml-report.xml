@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<validation filename="invoice.xml" datetime="2026-11-18 21:06:04">
+  <xml>
+    <info>
+      <version>2</version>
+      <profile>urn:cen.eu:en16931:2017</profile>
+      <validator version="2.26.0"/>
+      <rules>
+        <fired>53</fired>
+        <failed>0</failed>
+      </rules>
+      <duration unit="ms">1135</duration>
+    </info>
+    <summary status="valid"/>
+  </xml>
+  <summary status="valid"/>
+</validation>

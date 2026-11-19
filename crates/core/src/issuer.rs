@@ -11,6 +11,8 @@ pub struct Issuer {
     pub email: String,
     pub registration: String,
     pub vat_id: String,
+    /// Creditor IBAN for structured bank-transfer exports.
+    pub iban: String,
     pub terms: String,
     pub contact: String,
     pub country: String,

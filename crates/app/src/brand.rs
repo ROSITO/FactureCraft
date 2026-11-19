@@ -178,17 +178,28 @@ pub fn page_header<R>(
     actions: impl FnOnce(&mut egui::Ui) -> R,
 ) -> R {
     let mut result = None;
-    ui.horizontal(|ui| {
-        ui.set_min_height(58.0);
+    if ui.available_width() < 600.0 {
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = 2.0;
             ui.label(RichText::new(title).size(30.0).strong().color(INK));
             ui.label(RichText::new(subtitle).size(14.0).color(MUTED));
         });
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.horizontal(|ui| {
             result = Some(actions(ui));
         });
-    });
+    } else {
+        ui.horizontal(|ui| {
+            ui.set_min_height(58.0);
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                ui.label(RichText::new(title).size(30.0).strong().color(INK));
+                ui.label(RichText::new(subtitle).size(14.0).color(MUTED));
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                result = Some(actions(ui));
+            });
+        });
+    }
     ui.add_space(16.0);
     result.expect("header actions run once")
 }

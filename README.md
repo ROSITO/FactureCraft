@@ -51,3 +51,9 @@ FactureCraft draws architectural inspiration from [ArtCraft](https://github.com/
 ## Community
 
 Read the [contribution guide](CONTRIBUTING.md) before opening an issue. Use the [security policy](SECURITY.md) for vulnerability reports.
+
+## Verification and distribution
+
+The desktop app includes a preview-and-confirm Facture.net import. Historical reconciliation and corrected credit-note preparation are covered by synthetic regression tests. See the [acceptance report](docs/recette-complete.md) and [Factur-X validation results](docs/validation-facturx.md).
+
+Build a macOS app bundle with `scripts/package-macos.sh` after `cargo build --release --locked`. Packages are currently unsigned and not notarized. Windows and Linux distribution checks remain pending.

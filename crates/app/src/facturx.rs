@@ -15,9 +15,10 @@
 //! - the file syntax: header 1.7 with a binary comment, EOL around obj/endobj and
 //!   before endstream, exact /Length, trailer /ID.
 //!
-//! Not verified without a validator (veraPDF and Mustang are not available offline):
-//! glyph widths of the subset fonts against /W, absence of .notdef glyph references,
-//! the XMP against its schemas, and the CII XML against the Factur-X XSD and Schematron.
+//! Seven synthetic scenarios independently validated with Mustang 2.26.0 (bundled veraPDF):
+//! PDF/A-3B and embedded EN16931 XML passed on 2026-11-18; see docs/validation-facturx.md.
+//! Credit notes retain three nonblocking French note warnings. This evidence does not cover
+//! every possible invoice or establish acceptance by a French invoicing platform.
 use anyhow::{Context, Result, ensure};
 use facturecraft_core::{Store, facturx::FILE_NAME};
 use lopdf::{Dictionary, Document, Object, Stream, StringFormat};
@@ -538,6 +539,129 @@ mod tests {
             Ok(doc.get_page_content(id)?)
         };
         assert_eq!(page(&doc)?, page(&original)?);
+        Ok(())
+    }
+
+    /// Generates synthetic artifacts for independent XSD, Schematron and PDF/A validation.
+    /// Run explicitly; never reads the user's database or source exports.
+    #[test]
+    #[ignore = "writes synthetic validation artifacts; run explicitly"]
+    fn external_validation_fixture() -> Result<()> {
+        use facturecraft_core::{
+            facturx::{Invoice, cii_xml},
+            issuer::Issuer,
+            quote::{Line, Quote},
+        };
+        let directory = std::path::PathBuf::from(
+            std::env::var("FACTURECRAFT_VALIDATION_DIR")
+                .context("Set FACTURECRAFT_VALIDATION_DIR to the artifact directory")?,
+        );
+        std::fs::create_dir_all(&directory)?;
+        let issuer = Issuer {
+            name: "Studio Exemple".into(),
+            address: "12 rue Exemple\n75001 Paris".into(),
+            country: "France".into(),
+            registration: "123456789".into(),
+            email: "contact@example.test".into(),
+            iban: "FR1420041010050500013M02606".into(),
+            payment_terms: "30 jours".into(),
+            payment_method: "Virement bancaire".into(),
+            ..Default::default()
+        };
+        let quote = Quote {
+            recipient: "Client Exemple".into(),
+            recipient_address: "1 rue des Tests\n69001 Lyon".into(),
+            recipient_email: "client@example.test".into(),
+            service_date: "2026-11-18".into(),
+            recipient_country: "France".into(),
+            due_date: "2026-12-18".into(),
+            lines: vec![Line {
+                description: "Prestation de démonstration".into(),
+                price: "100".into(),
+                exemption_reason: "TVA non applicable, art. 293 B du CGI".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let mut taxed_issuer = issuer.clone();
+        taxed_issuer.vat_id = "FR12123456789".into();
+        let mut taxed = quote.clone();
+        taxed.lines[0].vat = "20".into();
+        taxed.lines[0].exemption_reason.clear();
+        let mut mixed = taxed.clone();
+        mixed.lines.push(Line {
+            description: "Prestation taux réduit".into(),
+            price: "77.77".into(),
+            quantity: "3".into(),
+            vat: "5.5".into(),
+            ..Default::default()
+        });
+        mixed.lines.push(Line {
+            description: "Prestation taux zéro".into(),
+            price: "13.33".into(),
+            exemption_reason: "zero".into(),
+            ..Default::default()
+        });
+        // Explicit zero rate uses no exemption reason (category Z).
+        mixed.lines[2].exemption_reason.clear();
+        let mut discounted = mixed.clone();
+        discounted.lines[0].quantity = "3".into();
+        discounted.lines[0].price = "333.33".into();
+        discounted.lines[0].discount = "10".into();
+        discounted.global_discount = "7.5".into();
+        for (name, kind, quote, issuer, prepaid, reference) in [
+            ("invoice", "invoice", &quote, &issuer, "0", false),
+            ("taxed", "invoice", &taxed, &taxed_issuer, "0", false),
+            ("mixed", "invoice", &mixed, &taxed_issuer, "0", false),
+            (
+                "discount",
+                "invoice",
+                &discounted,
+                &taxed_issuer,
+                "0",
+                false,
+            ),
+            ("deposit", "deposit", &taxed, &taxed_issuer, "0", false),
+            ("balance", "invoice", &taxed, &taxed_issuer, "24", true),
+            ("credit", "credit", &taxed, &taxed_issuer, "0", true),
+        ] {
+            let invoice = Invoice {
+                kind,
+                number: "TEST-F-000001",
+                issue_date: "2026-11-18",
+                currency: "EUR",
+                language: "fr",
+                quote,
+                issuer,
+                prepaid,
+                preceding: reference.then(|| facturecraft_core::facturx::Reference {
+                    number: "TEST-SOURCE-000001".into(),
+                    date: "2026-11-01".into(),
+                }),
+            };
+            let xml = cii_xml(&invoice)?;
+            let gross = quote.totals("EUR")?.2;
+            let due = (rust_decimal::Decimal::from_str_exact(&gross)?
+                - rust_decimal::Decimal::from_str_exact(prepaid)?)
+            .to_string();
+            let pdf = crate::pdf::render(&crate::pdf::Document {
+                kind,
+                number: Some(invoice.number),
+                date: invoice.issue_date,
+                title: "Document de démonstration",
+                currency: "EUR",
+                language: "fr",
+                quote,
+                issuer,
+                logo: None,
+                applied_deposit: (prepaid != "0").then_some((prepaid, &due)),
+            })?;
+            std::fs::write(directory.join(format!("{name}.xml")), &xml)?;
+            std::fs::write(
+                directory.join(format!("{name}.pdf")),
+                embed(&pdf, &xml, "Document de démonstration")?,
+            )?;
+        }
         Ok(())
     }
 

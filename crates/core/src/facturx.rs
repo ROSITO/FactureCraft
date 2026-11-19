@@ -200,6 +200,8 @@ pub fn cii_xml(invoice: &Invoice<'_>) -> Result<String> {
     }
     if invoice.kind != "credit" {
         note(issuer.late_penalties(invoice.language), Some("PMD"));
+        note(issuer.late_penalties(invoice.language), Some("PMT"));
+        note(issuer.late_penalties(invoice.language), Some("AAB"));
     }
     x.push_str("</rsm:ExchangedDocument>\n<rsm:SupplyChainTradeTransaction>\n");
 
@@ -308,9 +310,26 @@ pub fn cii_xml(invoice: &Invoice<'_>) -> Result<String> {
         // BG-16: BT-81, BT-82.
         write!(
             x,
-            "<ram:SpecifiedTradeSettlementPaymentMeans><ram:TypeCode>{code}</ram:TypeCode><ram:Information>{}</ram:Information></ram:SpecifiedTradeSettlementPaymentMeans>",
+            "<ram:SpecifiedTradeSettlementPaymentMeans><ram:TypeCode>{code}</ram:TypeCode><ram:Information>{}</ram:Information>",
             escape(method.trim())
         )?;
+        if matches!(code, "30" | "58") {
+            let iban: String = issuer
+                .iban
+                .chars()
+                .filter(|c| !c.is_whitespace())
+                .collect::<String>()
+                .to_ascii_uppercase();
+            ensure!(
+                valid_iban(&iban),
+                "Factur-X bank transfers require a valid creditor IBAN in issuer settings"
+            );
+            write!(
+                x,
+                "<ram:PayeePartyCreditorFinancialAccount><ram:IBANID>{iban}</ram:IBANID></ram:PayeePartyCreditorFinancialAccount>"
+            )?;
+        }
+        x.push_str("</ram:SpecifiedTradeSettlementPaymentMeans>");
     }
     // BG-23: BT-117, BT-120, BT-116, BT-118, BT-121, BT-119.
     for group in &groups {
@@ -460,6 +479,26 @@ struct Party<'a> {
     vat_id: &'a str,
 }
 
+fn valid_iban(iban: &str) -> bool {
+    let bytes = iban.as_bytes();
+    if !(15..=34).contains(&bytes.len())
+        || !bytes[..2].iter().all(u8::is_ascii_uppercase)
+        || !bytes[2..4].iter().all(u8::is_ascii_digit)
+        || !bytes.iter().all(u8::is_ascii_alphanumeric)
+    {
+        return false;
+    }
+    let mut remainder: u32 = 0;
+    for &byte in bytes[4..].iter().chain(&bytes[..4]) {
+        if byte.is_ascii_digit() {
+            remainder = (remainder * 10 + (byte - b'0') as u32) % 97;
+        } else {
+            remainder = (remainder * 100 + (byte - b'A' + 10) as u32) % 97;
+        }
+    }
+    remainder == 1
+}
+
 fn party(x: &mut String, tag: &str, party: &Party<'_>) -> Result<()> {
     ensure!(!party.name.trim().is_empty(), "{tag} needs a name");
     write!(
@@ -548,6 +587,18 @@ fn party(x: &mut String, tag: &str, party: &Party<'_>) -> Result<()> {
             x,
             "<ram:SpecifiedTaxRegistration><ram:ID schemeID=\"VA\">{}</ram:ID></ram:SpecifiedTaxRegistration>",
             escape(&vat_id)
+        )?;
+    }
+    // BT-32: French fiscal registration is the SIREN (first nine digits of SIRET).
+    if tag == "SellerTradeParty"
+        && country_code(party.country) == "FR"
+        && matches!(registration.len(), 9 | 14)
+        && registration.bytes().all(|b| b.is_ascii_digit())
+    {
+        write!(
+            x,
+            "<ram:SpecifiedTaxRegistration><ram:ID schemeID=\"FC\">{}</ram:ID></ram:SpecifiedTaxRegistration>",
+            &registration[..9]
         )?;
     }
     write!(x, "</ram:{tag}>")?;
@@ -812,6 +863,7 @@ mod tests {
             email: "contact@example.test".into(),
             payment_terms: "30 jours".into(),
             payment_method: "Virement bancaire".into(),
+            iban: "FR1420041010050500013M02606".into(),
             ..Default::default()
         }
     }
@@ -828,6 +880,32 @@ mod tests {
             prepaid: "0",
             preceding: None,
         }
+    }
+
+    #[test]
+    fn bank_transfer_requires_a_real_checksum_valid_account() -> Result<()> {
+        assert!(valid_iban("FR1420041010050500013M02606"));
+        assert!(!valid_iban("FR1420041010050500013M02607"));
+        assert!(!valid_iban("FR"));
+        let mut issuer = issuer();
+        issuer.iban.clear();
+        let quote = Quote {
+            recipient: "Client".into(),
+            recipient_country: "France".into(),
+            lines: vec![Line {
+                description: "Service".into(),
+                price: "100".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert!(
+            cii_xml(&invoice(&quote, &issuer))
+                .unwrap_err()
+                .to_string()
+                .contains("creditor IBAN")
+        );
+        Ok(())
     }
 
     fn reconciles(xml: &str, quote: &Quote) {
@@ -901,7 +979,7 @@ mod tests {
         assert_eq!(value(&seller, "ram:CityName"), "PARIS");
         assert_eq!(value(&seller, "ram:LineOne"), "12 chemin des Essais");
         assert_eq!(value(&seller, "ram:CountryID"), "FR");
-        assert!(!seller.contains("SpecifiedTaxRegistration"));
+        assert!(seller.contains("schemeID=\"FC\">123456789"));
         let buyer = value(&xml, "ram:BuyerTradeParty");
         assert_eq!(
             value(&buyer, "ram:Name"),

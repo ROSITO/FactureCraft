@@ -246,6 +246,9 @@ impl Store {
             "Invalid document transition"
         );
         let mut content = self.quote(id)?;
+        if kind == "credit" && state.kind == "invoice" && matches!(shape, Shape::All) {
+            self.remaining_credit_lines(id, &source.currency, &source.language, &mut content)?;
+        }
         match shape {
             Shape::All => {}
             Shape::Lines(indexes) => {
@@ -276,6 +279,100 @@ impl Store {
         }
         tx.commit()?;
         Ok(draft)
+    }
+
+    /// Build a credit for the remaining invoice amount by tax rate and exemption reason.
+    /// Called inside the same immediate transaction as draft creation and version checking.
+    fn remaining_credit_lines(
+        &self,
+        invoice: i64,
+        currency: &str,
+        language: &str,
+        content: &mut Quote,
+    ) -> Result<()> {
+        use std::collections::BTreeMap;
+        type Key = (Decimal, String);
+        let mut remaining = BTreeMap::<Key, (Decimal, Decimal)>::new();
+        let add = |map: &mut BTreeMap<Key, (Decimal, Decimal)>,
+                   quote: &Quote,
+                   sign: Decimal|
+         -> Result<()> {
+            for bucket in quote.tax_breakdown(currency)? {
+                let key = (
+                    Decimal::from_str_exact(&bucket.rate)?.normalize(),
+                    bucket.exemption_reason,
+                );
+                let values = map.entry(key).or_default();
+                values.0 += sign * Decimal::from_str_exact(&bucket.net)?;
+                values.1 += sign * Decimal::from_str_exact(&bucket.tax)?;
+            }
+            Ok(())
+        };
+        add(&mut remaining, content, Decimal::ONE)?;
+        let mut deposits = self
+            .0
+            .prepare("SELECT deposit_id FROM billing_allocation WHERE invoice_id=?1")?;
+        let deposits = deposits
+            .query_map([invoice], |r| r.get::<_, i64>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for deposit in deposits {
+            add(&mut remaining, &self.quote(deposit)?, -Decimal::ONE)?;
+            let mut credits = self.0.prepare("SELECT id FROM billing WHERE source_id=?1 AND kind='credit' AND number IS NOT NULL")?;
+            let credits = credits
+                .query_map([deposit], |r| r.get::<_, i64>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            for credit in credits {
+                add(&mut remaining, &self.quote(credit)?, Decimal::ONE)?;
+            }
+        }
+        let mut credits = self.0.prepare(
+            "SELECT id FROM billing WHERE source_id=?1 AND kind='credit' AND number IS NOT NULL",
+        )?;
+        let credits = credits
+            .query_map([invoice], |r| r.get::<_, i64>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for credit in credits {
+            add(&mut remaining, &self.quote(credit)?, -Decimal::ONE)?;
+        }
+        let mut lines = Vec::new();
+        for ((rate, reason), (net, tax)) in &remaining {
+            ensure!(
+                *net >= Decimal::ZERO && *tax >= Decimal::ZERO,
+                "Remaining credit tax breakdown requires manual reconciliation"
+            );
+            if net.is_zero() && tax.is_zero() {
+                continue;
+            }
+            lines.push(crate::quote::Line {
+                description: if language == "en" {
+                    "Remaining creditable amount"
+                } else {
+                    "Montant restant à créditer"
+                }
+                .into(),
+                price: net.to_string(),
+                vat: rate.to_string(),
+                exemption_reason: reason.clone(),
+                ..Default::default()
+            });
+        }
+        ensure!(!lines.is_empty(), "No amount remains to credit");
+        content.lines = lines;
+        content.global_discount.clear();
+        let actual = content.tax_breakdown(currency)?;
+        for bucket in actual {
+            let key = (
+                Decimal::from_str_exact(&bucket.rate)?.normalize(),
+                bucket.exemption_reason,
+            );
+            let expected = remaining.get(&key).context("Missing credit tax bucket")?;
+            ensure!(
+                Decimal::from_str_exact(&bucket.net)? == expected.0
+                    && Decimal::from_str_exact(&bucket.tax)? == expected.1,
+                "Remaining credit tax breakdown requires manual reconciliation"
+            );
+        }
+        Ok(())
     }
 
     pub fn create_invoice(&self, title: &str, currency: &str, language: &str) -> Result<Draft> {
@@ -474,6 +571,11 @@ impl Store {
         let pdf = render(&draft, &quote, &number, &issued_on)?;
         ensure!(pdf.starts_with(b"%PDF-"), "Renderer did not return a PDF");
         tx.execute("UPDATE billing SET number=?1,pdf=?2,issued_at=CURRENT_TIMESTAMP,version=version+1 WHERE id=?3",params![number,pdf,id])?;
+        if state.kind == "credit"
+            && let Some(source) = state.source_id
+        {
+            tx.execute("UPDATE billing SET version=version+1 WHERE id=?1", [source])?;
+        }
         tx.commit()?;
         Ok(number)
     }
@@ -727,6 +829,64 @@ mod tests {
     }
     fn render(_: &Draft, _: &Quote, number: &str, _: &str) -> Result<Vec<u8>> {
         Ok(format!("%PDF-1.4 {number}").into_bytes())
+    }
+
+    #[test]
+    fn credit_defaults_to_remaining_tax_buckets_after_deposit_and_prior_credit() -> Result<()> {
+        let store = Store::open(std::path::Path::new(":memory:"))?;
+        let mut quote = example("100");
+        quote.lines[0].vat = "20".into();
+        quote.lines.push(Line {
+            description: "Reduced rate".into(),
+            price: "100".into(),
+            vat: "10".into(),
+            ..Default::default()
+        });
+        let source = store.save_quote(None, "Quote", "EUR", "fr", &quote)?;
+        store.finalize_document(source.id, render)?;
+        store.accept_quote(source.id, "2026-11-18")?;
+        let version = store.billing_state(source.id)?.version;
+        let deposit =
+            store.derive_deposit(source.id, version, &Share::Percent("30".into()), "Deposit")?;
+        store.finalize_document(deposit.id, render)?;
+        let invoice = store.derive_document(source.id, "invoice", "Invoice")?;
+        store.allocate_deposit(invoice.id, deposit.id)?;
+        store.finalize_document(invoice.id, render)?;
+        let version = store.billing_state(invoice.id)?.version;
+        assert!(
+            store
+                .derive_document_versioned(invoice.id, version - 1, "credit", "Stale")
+                .is_err()
+        );
+        let first = store.derive_document_versioned(invoice.id, version, "credit", "Credit")?;
+        let first_quote = store.quote(first.id)?;
+        assert_eq!(
+            first_quote.totals("EUR")?,
+            ("140.00".into(), "21.00".into(), "161.00".into())
+        );
+        let mut partial = first_quote;
+        partial.lines.retain(|line| line.vat == "20");
+        partial.lines[0].price = "10".into();
+        store.save_quote_versioned(first.id, 1, "Partial", "EUR", "fr", &partial)?;
+        store.finalize_document(first.id, render)?;
+        assert!(
+            store
+                .derive_document_versioned(invoice.id, version, "credit", "Stale after credit")
+                .is_err()
+        );
+        let next = store.derive_document(invoice.id, "credit", "Remaining")?;
+        let next_quote = store.quote(next.id)?;
+        assert_eq!(
+            next_quote.totals("EUR")?,
+            ("130.00".into(), "19.00".into(), "149.00".into())
+        );
+        store.finalize_document(next.id, render)?;
+        assert!(
+            store
+                .derive_document(invoice.id, "credit", "Excess")
+                .is_err()
+        );
+        Ok(())
     }
 
     #[test]

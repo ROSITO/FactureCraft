@@ -114,6 +114,11 @@ impl Batch {
         Ok(Self { entries, report })
     }
 
+    /// Inspect the loaded batch without discarding the exact data to be imported.
+    pub fn report(&self) -> &Report {
+        &self.report
+    }
+
     pub fn preview(self) -> Report {
         self.report
     }

@@ -95,6 +95,7 @@ enum ExportFormat {
 #[derive(Subcommand)]
 enum ArchiveAction {
     List,
+    Reconcile,
     Get {
         source: String,
         category: String,
@@ -235,6 +236,13 @@ fn main() -> Result<()> {
             Ok(())
         }
         Command::Archive { action } => match action {
+            ArchiveAction::Reconcile => {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&store.reconcile_archive()?)?
+                );
+                Ok(())
+            }
             ArchiveAction::List => {
                 println!("{}", serde_json::to_string_pretty(&store.archive()?)?);
                 Ok(())

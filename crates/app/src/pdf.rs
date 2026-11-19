@@ -1128,3 +1128,83 @@ mod tests {
         assert_eq!(logo_size(&png), Some((24.0, 12.0)));
     }
 }
+
+#[cfg(test)]
+mod acceptance {
+    use super::*;
+    use facturecraft_core::{Store, contacts::Contact, issuer::Issuer, quote::Line};
+
+    #[test]
+    fn actual_pdfs_follow_quote_invoice_payment_credit_and_restore() -> Result<()> {
+        let folder = tempfile::tempdir()?;
+        let store = Store::open(&folder.path().join("acceptance.sqlite3"))?;
+        store.save_issuer(&Issuer {
+            name: "Atelier Exemple".into(),
+            address: "1 rue du Test, 75001 Paris".into(),
+            registration: "123456789".into(),
+            country: "FR".into(),
+            ..Default::default()
+        })?;
+        store.save_contact(&Contact {
+            name: "Client fictif".into(),
+            email: "client@example.invalid".into(),
+            address: "2 rue du Test".into(),
+            country: "FR".into(),
+            ..Default::default()
+        })?;
+        assert_eq!(store.contacts()?.len(), 1);
+        let quote = Quote {
+            recipient: "Client fictif".into(),
+            recipient_address: "2 rue du Test".into(),
+            due_date: "2026-12-18".into(),
+            lines: vec![Line {
+                description: "Prestation fictive".into(),
+                price: "1000".into(),
+                vat: "20".into(),
+                ..Default::default()
+            }],
+            notes: "PRIVATE-NOTE-NEVER-PRINT".into(),
+            ..Default::default()
+        };
+        let draft = store.save_quote(None, "Devis fictif", "EUR", "fr", &quote)?;
+        let issue = |id| -> Result<Vec<u8>> {
+            let state = store.billing_state(id)?;
+            let issuer = store.issuer()?;
+            store.finalize_document(id, |draft, quote, number, date| {
+                render(&Document {
+                    kind: &state.kind,
+                    number: Some(number),
+                    date,
+                    title: &draft.title,
+                    currency: &draft.currency,
+                    language: &draft.language,
+                    quote,
+                    issuer: &issuer,
+                    logo: None,
+                    applied_deposit: (state.kind == "invoice")
+                        .then_some((&state.deposits, &state.outstanding)),
+                })
+            })?;
+            store.finalized_pdf(id)
+        };
+        let original = issue(draft.id)?;
+        assert!(original.starts_with(b"%PDF-"));
+        store.accept_quote(draft.id, "2026-11-18")?;
+        let invoice = store.derive_document(draft.id, "invoice", "Facture fictive")?;
+        let invoice_pdf = issue(invoice.id)?;
+        store.record_payment(invoice.id, "300", "2026-11-18", "transfer", "test")?;
+        assert_eq!(store.billing_state(invoice.id)?.outstanding, "900.00");
+        let credit = store.derive_document(invoice.id, "credit", "Avoir fictif")?;
+        issue(credit.id)?;
+        assert_eq!(store.finalized_pdf(invoice.id)?, invoice_pdf);
+        let backup = folder.path().join("backup.sqlite3");
+        store.snapshot(&backup)?;
+        let restored_path = folder.path().join("restored.sqlite3");
+        facturecraft_core::backup::restore_snapshot(&backup, &restored_path)?;
+        let restored = Store::open(&restored_path)?;
+        assert_eq!(restored.finalized_pdf(draft.id)?, original);
+        assert_eq!(restored.finalized_pdf(invoice.id)?, invoice_pdf);
+        assert_eq!(restored.payments(invoice.id)?.len(), 1);
+        Ok(())
+    }
+}

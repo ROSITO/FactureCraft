@@ -136,6 +136,8 @@ Déclarer un serveur local stdio avec le chemin absolu du binaire installé comm
 - `update_draft` prend la version attendue.
 - `preview_draft` renvoie le PDF comme ressource intégrée de type `application/pdf`.
 - `list_products` lit le catalogue de produits et services.
+- `list_archived_documents` et `get_archived_document` lisent l’historique importé de Facture.net, en lecture seule ; le second fournit le destinataire et les lignes reconstruites, prêts à réutiliser.
+- `create_invoice_draft` prépare un brouillon de facture (clé d’idempotence, échéance par défaut à 30 jours). La numérotation et l’émission restent une action manuelle dans l’interface.
 
 ## Importer et sauvegarder
 

@@ -90,6 +90,14 @@ impl Store {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// Archived document found by its source number (case-insensitive).
+    pub fn archived_by_number(&self, number: &str) -> Result<ArchivedListing> {
+        self.archived_documents()?
+            .into_iter()
+            .find(|doc| doc.number.eq_ignore_ascii_case(number.trim()))
+            .with_context(|| format!("No archived document numbered {}", number.trim()))
+    }
+
     /// New draft (quote, or invoice for an archived invoice) taking the recipient and
     /// the lines reconstructed from an archived document. The archive is unchanged.
     pub fn draft_from_archive(
@@ -98,6 +106,22 @@ impl Store {
         defaults: Quote,
         title: &str,
     ) -> Result<Draft> {
+        let quote = self.quote_from_archive(listing, defaults)?;
+        let tx = self.0.unchecked_transaction()?;
+        let draft = self.write_quote(None, title, &listing.currency, "fr", &quote)?;
+        if listing.kind != "quote" {
+            tx.execute(
+                "UPDATE billing SET kind='invoice' WHERE id=?1",
+                params![draft.id],
+            )?;
+        }
+        tx.commit()?;
+        self.get(draft.id)?.context("Draft not found")
+    }
+
+    /// Recipient and reconstructed lines of an archived document, as editable quote
+    /// content, without saving anything. Lines printed with an amount only become 1 × amount.
+    pub fn quote_from_archive(&self, listing: &ArchivedListing, defaults: Quote) -> Result<Quote> {
         let category = if listing.kind == "quote" {
             "quotations"
         } else {
@@ -178,16 +202,7 @@ impl Store {
                 ..Default::default()
             });
         }
-        let tx = self.0.unchecked_transaction()?;
-        let draft = self.write_quote(None, title, &listing.currency, "fr", &quote)?;
-        if listing.kind != "quote" {
-            tx.execute(
-                "UPDATE billing SET kind='invoice' WHERE id=?1",
-                params![draft.id],
-            )?;
-        }
-        tx.commit()?;
-        self.get(draft.id)?.context("Draft not found")
+        Ok(quote)
     }
 }
 
@@ -240,6 +255,36 @@ mod tests {
         assert_eq!(quote.pdf.as_deref(), Some("devis/D012700001.pdf"));
         assert!(invoice.pdf.is_none());
         assert_eq!(list[0].kind, "invoice", "newest first");
+        Ok(())
+    }
+
+    #[test]
+    fn agent_reuses_an_archived_invoice_as_an_idempotent_invoice_draft() -> Result<()> {
+        let store = store_with_archive()?;
+        let listing = store.archived_by_number("f012700001")?;
+        let mut quote = store.quote_from_archive(&listing, Quote::default())?;
+        assert_eq!(quote.recipient, "Atelier Exemple");
+        quote.lines[0].description = "Abonnement 2027".into();
+        let first = store.create_invoice_idempotent("k", "Facture 2027", "EUR", "fr", &quote)?;
+        let again = store.create_invoice_idempotent("k", "Facture 2027", "EUR", "fr", &quote)?;
+        assert_eq!(first.id, again.id, "replaying the key gives the same draft");
+        let state = store.billing_state(first.id)?;
+        assert_eq!(
+            (state.kind.as_str(), state.number.is_none()),
+            ("invoice", true)
+        );
+        assert_eq!(
+            store.quote(first.id)?.due_date.len(),
+            10,
+            "default due date"
+        );
+        quote.due_date = "2027-02-30".into();
+        assert!(
+            store
+                .create_invoice_idempotent("k2", "X", "EUR", "fr", &quote)
+                .is_err()
+        );
+        assert!(store.archived_by_number("F999").is_err());
         Ok(())
     }
 

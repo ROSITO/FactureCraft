@@ -136,6 +136,34 @@ impl Store {
         Ok(draft)
     }
 
+    /// Invoice draft prepared by an agent; replaying the same key returns the same draft.
+    /// A missing due date defaults to 30 days, as in the app. Finalization stays manual.
+    pub fn create_invoice_idempotent(
+        &self,
+        key: &str,
+        title: &str,
+        currency: &str,
+        language: &str,
+        quote: &Quote,
+    ) -> Result<Draft> {
+        let request = serde_json::to_string(&("create_invoice", title, currency, language, quote))?;
+        let tx = self.billing_transaction()?;
+        if let Some(id) = idempotency::lookup(&tx, key, &request)? {
+            return self.get(id)?.context("Document not found");
+        }
+        let mut content = quote.clone();
+        if content.due_date.trim().is_empty() {
+            content.due_date = self.date_in_days(30)?;
+        } else {
+            self.validate_date(content.due_date.trim())?;
+        }
+        let draft = self.write_quote(None, title, currency, language, &content)?;
+        tx.execute("UPDATE billing SET kind='invoice' WHERE id=?1", [draft.id])?;
+        idempotency::record(&tx, key, &request, draft.id)?;
+        tx.commit()?;
+        Ok(draft)
+    }
+
     pub fn accept_quote(&self, id: i64, date: &str) -> Result<()> {
         self.validate_date(date)?;
         let changed = self.0.execute("UPDATE billing SET accepted_date=?2,version=version+1 WHERE id=?1 AND kind='quote' AND number IS NOT NULL AND accepted_date IS NULL AND closed IS NULL",params![id,date])?;

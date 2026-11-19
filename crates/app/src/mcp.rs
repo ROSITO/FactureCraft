@@ -93,7 +93,7 @@ fn tools() -> Value {
         &["description", "quantity", "price", "discount", "vat"],
     );
     let quote = object(
-        json!({"recipient":string,"recipient_email":string,"recipient_address":string,"recipient_country":string,"recipient_registration":string,"payment_terms":string,"payment_method":string,"cgv":string,"valid_until":string,"terms":string,"global_discount":string,"tags":{"type":"array","items":string},"notes":string,"lines":{"type":"array","items":line}}),
+        json!({"recipient":string,"recipient_email":string,"recipient_address":string,"recipient_country":string,"recipient_registration":string,"payment_terms":string,"payment_method":string,"cgv":string,"valid_until":string,"terms":string,"global_discount":string,"tags":{"type":"array","items":string},"notes":string,"due_date":string,"service_date":string,"lines":{"type":"array","items":line}}),
         &["recipient", "lines"],
     );
     let draft_id = object(json!({"id":id}), &["id"]);
@@ -127,6 +127,27 @@ fn tools() -> Value {
             "Find local contacts by name",
             object(json!({"query":string}), &["query"]),
             true
+        ),
+        tool(
+            "list_archived_documents",
+            "List documents imported from Facture.net (read-only history): number, kind, date, recipient, amounts, status. Optional query filters on number, recipient or date",
+            object(json!({"query":string}), &[]),
+            true
+        ),
+        tool(
+            "get_archived_document",
+            "Read an imported Facture.net document by number, with its recipient and reconstructed lines as quote content ready to reuse in a new draft (check the lines)",
+            object(json!({"number":string}), &["number"]),
+            true
+        ),
+        tool(
+            "create_invoice_draft",
+            "Prepare an invoice draft (not finalized: numbering and issuance stay manual in the app). due_date YYYY-MM-DD defaults to 30 days",
+            object(
+                json!({"title":string,"currency":string,"language":language,"quote":quote,"idempotency_key":string}),
+                &["title", "currency", "language", "quote", "idempotency_key"],
+            ),
+            false
         ),
         tool(
             "create_draft",
@@ -194,6 +215,19 @@ struct Search {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct ArchiveSearch {
+    #[serde(default)]
+    query: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ArchiveNumber {
+    number: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Prepare {
     title: String,
     currency: String,
@@ -250,6 +284,8 @@ fn quote_arguments<T: DeserializeOwned>(value: &Value) -> Result<T, RpcError> {
             "global_discount",
             "tags",
             "notes",
+            "due_date",
+            "service_date",
             "lines",
         ],
     ) || !quote["lines"].as_array().is_some_and(|lines| {
@@ -314,6 +350,49 @@ fn call(store: &Store, name: &str, args: &Value) -> Result<Value, RpcError> {
                         .collect::<Vec<_>>()
                 )
             })
+        }
+        "list_archived_documents" => {
+            let query = arguments::<ArchiveSearch>(args)?
+                .query
+                .trim()
+                .to_lowercase();
+            store.archived_documents().map(|documents| {
+                json!(
+                    documents
+                        .into_iter()
+                        .filter(|doc| {
+                            query.is_empty()
+                                || [&doc.number, &doc.recipient, &doc.date]
+                                    .iter()
+                                    .any(|field| field.to_lowercase().contains(&query))
+                        })
+                        .take(100)
+                        .collect::<Vec<_>>()
+                )
+            })
+        }
+        "get_archived_document" => {
+            let number = arguments::<ArchiveNumber>(args)?.number;
+            store.archived_by_number(&number).and_then(|listing| {
+                let quote = store.quote_from_archive(&listing, Default::default())?;
+                Ok(json!({
+                    "document": listing,
+                    "reusable_quote": quote,
+                    "warning": "Lines are reconstructed from the original PDF; amounts printed without quantity become 1 x amount. Review before finalizing."
+                }))
+            })
+        }
+        "create_invoice_draft" => {
+            let input: Prepare = quote_arguments(args)?;
+            store
+                .create_invoice_idempotent(
+                    &input.idempotency_key,
+                    &input.title,
+                    &input.currency,
+                    &input.language,
+                    &input.quote,
+                )
+                .and_then(|draft| operations::document(store, draft.id))
         }
         "create_draft" => {
             let input: Prepare = quote_arguments(args)?;

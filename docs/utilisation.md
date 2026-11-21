@@ -81,7 +81,7 @@ Depuis « Voir et agir » :
 - marquer un devis finalisé comme accepté, refusé ou annulé ;
 - enregistrer un règlement avec sa référence, puis annuler un règlement saisi par erreur.
 
-Les listes se filtrent par état et se recherchent par titre, client ou numéro. Dans Clients, les contacts du carnet se modifient et se suppriment. Les contacts importés de Facture.net restent en lecture seule et peuvent être copiés dans le carnet.
+Les listes se filtrent par état et se recherchent par titre, client ou numéro. Dans Clients, le carnet CRM local porte téléphone, notes privées, étiquettes et date de prochaine relance ; la liste **À relancer** regroupe les échéances dues. La fiche Historique affiche le CA HT et le reste à payer par devise. Les contacts importés de Facture.net restent en lecture seule et peuvent être copiés dans le carnet.
 
 ## Étiquettes et notes internes
 
@@ -93,7 +93,7 @@ Dans « Voir et agir » d’un devis accepté, « Créer une facture » ouvre la
 
 ## Historique d’un client
 
-Dans Clients, « Historique » (ou un clic sur le nom) ouvre une fiche listant les documents dont le destinataire porte le même nom, sans tenir compte des majuscules ni des espaces autour : type, numéro et statut, date d’émission, montant TTC et reste à payer pour les factures, avec « Voir et agir ». Les devis et factures archivés de Facture.net au même nom s’ajoutent en lecture seule, avec leur numéro et leur montant HT.
+Dans Clients, « Historique » (ou un clic sur le nom) ouvre une fiche avec, en tête, le CA HT et le reste à payer par devise, puis la liste des documents dont le destinataire porte le même nom, sans tenir compte des majuscules ni des espaces autour : type, numéro et statut, date d’émission, montant TTC et reste à payer pour les factures, avec « Voir et agir ». Les devis et factures archivés de Facture.net au même nom s’ajoutent en lecture seule, avec leur numéro et leur montant HT.
 
 ## Ouvrir les PDF archivés
 
@@ -130,7 +130,7 @@ Le PDF figé enregistré dans la base n’est pas modifié : le fichier Factur-X
 
 Déclarer un serveur local stdio avec le chemin absolu du binaire installé comme commande et `mcp` comme argument. Pour choisir une base dédiée, ajouter `--db`, suivi de son chemin absolu, avant `mcp`. La liste des outils publiée par le serveur fournit les schémas d’entrée.
 
-- `search_parties` recherche par nom dans le carnet de contacts local.
+- `search_parties` recherche par nom, téléphone, notes ou étiquettes dans le carnet de contacts local.
 - `list_drafts` et `get_draft` lisent les métadonnées. `get_document` fournit le contenu, la version et les totaux.
 - `create_draft` et `create_invoice_draft_from_quote` prennent une clé d’idempotence. Le devis source d’une facture doit avoir été accepté dans l’interface.
 - `update_draft` prend la version attendue.

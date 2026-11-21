@@ -120,15 +120,16 @@ Si le catalogue est vide, l’écran affiche **Votre catalogue est vide**.
 
 ## 4. Clients
 
-La page **Clients** est votre carnet d’adresses. Elle regroupe vos clients et leurs sociétés.
+La page **Clients** est votre carnet CRM local. Elle regroupe vos clients, leurs coordonnées, vos notes privées et les relances à faire.
 
 ### Ajouter un client
 
 1. Cliquez sur **+ Nouveau client**.
-2. Renseignez le **Nom ou société**, l’**Adresse**, le **Pays**, le **N° d’entreprise** (pour un client professionnel) et l’**E-mail**.
-3. Enregistrez.
+2. Renseignez le **Nom ou société**, l’**Adresse**, le **Pays**, le **N° d’entreprise** (pour un client professionnel), l’**E-mail** et le **Téléphone**.
+3. Optionnel : **Prochaine relance** (AAAA-MM-JJ), **Étiquettes** (séparées par des virgules) et **Notes privées**. Ces champs restent dans le carnet : ils ne sont jamais imprimés sur un PDF.
+4. Enregistrez.
 
-Par exemple : Nom ou société : « Boutique Exemple » ; Adresse : « 3 avenue de l’Exemple, 69001 Lyon » ; E-mail : « contact@example.com ».
+Par exemple : Nom ou société : « Boutique Exemple » ; Adresse : « 3 avenue de l’Exemple, 69001 Lyon » ; E-mail : « contact@example.com » ; Téléphone : « 06 12 34 56 78 ».
 
 ### Modifier ou supprimer un client
 
@@ -140,9 +141,13 @@ Cliquez sur **Modifier** pour changer les informations. Cliquez sur **Supprimer*
 
 Si vous avez importé vos données depuis Facture.net, vos anciens contacts apparaissent dans la liste. Ils sont en **lecture seule** : vous ne pouvez pas les modifier. Pour les utiliser, cliquez sur **Copier dans le carnet**. Une copie modifiable est alors créée.
 
+### Relances
+
+Quand une **Prochaine relance** est atteinte ou dépassée, le client apparaît en haut de la page dans **À relancer**. **Relancé** retire la date ; **Modifier** rouvre la fiche pour en planifier une autre.
+
 ### Historique d’un client
 
-Cliquez sur **Historique** (ou sur le nom du client) pour voir tous les documents adressés à ce client. La liste indique le type, le numéro, le statut, la date, le montant TTC et le **Reste à payer** pour les factures. Depuis cette fiche, le bouton **Voir et agir** ouvre le document.
+Cliquez sur **Historique** (ou sur le nom du client) pour ouvrir la fiche. En tête, la synthèse affiche le **CA HT** (factures moins avoirs, archives Facture.net comprises) et le **Reste à payer** des documents locaux, par devise. La liste indique ensuite le type, le numéro, le statut, la date, le montant TTC et le reste à payer pour les factures. Depuis cette fiche, le bouton **Voir et agir** ouvre le document.
 
 Les devis et factures archivés de Facture.net au même nom apparaissent aussi, en lecture seule.
 

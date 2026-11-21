@@ -124,7 +124,7 @@ fn tools() -> Value {
         ),
         tool(
             "search_parties",
-            "Find local contacts by name",
+            "Find local contacts by name, phone, notes or tags",
             object(json!({"query":string}), &["query"]),
             true
         ),
@@ -341,11 +341,24 @@ fn call(store: &Store, name: &str, args: &Value) -> Result<Value, RpcError> {
         }
         "search_parties" => {
             let query = arguments::<Search>(args)?.query.to_lowercase();
+            let needle = query.trim();
             store.contacts().map(|contacts| {
                 json!(
                     contacts
                         .into_iter()
-                        .filter(|contact| contact.name.to_lowercase().contains(query.trim()))
+                        .filter(|contact| {
+                            let tags = contact.tags.join(" ");
+                            needle.is_empty()
+                                || [
+                                    contact.name.as_str(),
+                                    contact.email.as_str(),
+                                    contact.phone.as_str(),
+                                    contact.notes.as_str(),
+                                    tags.as_str(),
+                                ]
+                                .iter()
+                                .any(|field| field.to_lowercase().contains(needle))
+                        })
                         .take(50)
                         .collect::<Vec<_>>()
                 )

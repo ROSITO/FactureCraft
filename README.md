@@ -12,7 +12,7 @@ Sprints 1 to 4 are in place: contacts, quote lines with tax and discounts, PDF p
 
 | Interface | Current scope |
 | --- | --- |
-| Native desktop app | Dashboard, documents with a live preview, products and services catalogue, finalization, acceptance, payments |
+| Native desktop app | Dashboard, documents with a live preview, CRM clients (notes, tags, follow-ups, revenue summary), products and services catalogue, finalization, acceptance, payments |
 | `facturecraft` CLI | Prepare and update drafts, derive documents, preview PDFs, import, backup and restore |
 | `facturecraft mcp` | Search contacts and products, read documents, prepare drafts and PDF previews through a local stdio server |
 

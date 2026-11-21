@@ -140,6 +140,8 @@ pub fn run(store: Store, language: Option<Language>) -> Result<()> {
                 composing: false,
                 page: Page::Dashboard,
                 contact_query: String::new(),
+                contact_tags_text: String::new(),
+                follow_ups: Vec::new(),
                 new_contact: None,
                 archive_items: Vec::new(),
                 archive_query: String::new(),
@@ -235,6 +237,10 @@ struct Drafts {
     composing: bool,
     page: Page,
     contact_query: String,
+    /// Comma-separated tags while editing a contact card.
+    contact_tags_text: String,
+    /// Local contacts whose follow-up date is due.
+    follow_ups: Vec<facturecraft_core::contacts::Contact>,
     new_contact: Option<facturecraft_core::contacts::Contact>,
     archive_items: Vec<facturecraft_core::import::ArchiveItem>,
     archive_query: String,
@@ -476,6 +482,13 @@ impl Drafts {
                 return;
             }
         }
+        match self.store.follow_ups_due() {
+            Ok(follow_ups) => self.follow_ups = follow_ups,
+            Err(error) => {
+                self.error = Some(error.to_string());
+                return;
+            }
+        }
         match self.store.list() {
             Ok(items) => {
                 self.items = items;
@@ -666,10 +679,14 @@ impl eframe::App for Drafts {
                     crate::brand::page_header(
                         ui,
                         t("Clients", "Clients"),
-                        t("Vos clients et sociétés, y compris ceux importés de Facture.net", "Your clients and companies, including those imported from Facture.net"),
+                        t(
+                            "Carnet CRM local : fiche, relances et synthèse par client",
+                            "Local CRM address book: card, follow-ups and per-client summary",
+                        ),
                         |ui| {
                             if ui.add(crate::brand::primary(t("+ Nouveau client", "+ New client"))).clicked() {
-                                self.new_contact.get_or_insert_with(Default::default);
+                                self.contact_tags_text.clear();
+                                self.new_contact = Some(Default::default());
                             }
                         },
                     );
@@ -687,18 +704,27 @@ impl eframe::App for Drafts {
                                         (t("Pays", "Country"), &mut contact.country, 1),
                                         (t("N° d’entreprise", "Company number"), &mut contact.registration, 1),
                                         (t("E-mail", "Email"), &mut contact.email, 1),
+                                        (t("Téléphone", "Phone"), &mut contact.phone, 1),
+                                        (t("Prochaine relance (AAAA-MM-JJ)", "Next follow-up (YYYY-MM-DD)"), &mut contact.follow_up, 1),
                                     ] {
                                         ui.label(label);
                                         let edit = if rows > 1 { crate::brand::area(field).desired_rows(rows) } else { crate::brand::field(field) };
                                         ui.add(edit.desired_width(ui.available_width()));
                                         ui.end_row();
                                     }
+                                    ui.label(t("Étiquettes (séparées par des virgules, privées)", "Tags (comma-separated, private)"));
+                                    ui.add(crate::brand::field(&mut self.contact_tags_text).desired_width(ui.available_width()));
+                                    ui.end_row();
+                                    ui.label(t("Notes privées (jamais imprimées)", "Private notes (never printed)"));
+                                    ui.add(crate::brand::area(&mut contact.notes).desired_rows(3).desired_width(ui.available_width()));
+                                    ui.end_row();
                                 });
                                 ui.horizontal(|ui| {
                                     if ui
                                         .button(t("Enregistrer dans le carnet", "Save contact"))
                                         .clicked()
                                     {
+                                        contact.tags = facturecraft_core::quote::parse_tags(&self.contact_tags_text);
                                         match self.store.save_contact(contact) {
                                             Ok(()) => {
                                                 close = true;
@@ -708,6 +734,8 @@ impl eframe::App for Drafts {
                                                 let message = error.to_string();
                                                 self.error = Some(if message == "Contact name must contain 1–200 characters" {
                                                     t("Le nom du client doit contenir entre 1 et 200 caractères.", "Contact name must contain 1–200 characters").into()
+                                                } else if message == "Expected a valid date YYYY-MM-DD" {
+                                                    t("La date de relance doit être au format AAAA-MM-JJ.", "Follow-up date must be YYYY-MM-DD.").into()
                                                 } else { message });
                                             }
                                         }
@@ -721,16 +749,70 @@ impl eframe::App for Drafts {
                             });
                         if close {
                             self.new_contact = None;
+                            self.contact_tags_text.clear();
                             self.refresh();
                         }
                     }
                     if let Some(error) = &self.error {
                         ui.colored_label(ui.visuals().error_fg_color, error);
                     }
+                    if !self.follow_ups.is_empty() {
+                        crate::brand::card(ui, |ui| {
+                            ui.set_min_width(ui.available_width());
+                            crate::brand::card_title(ui, t("À relancer", "Follow up"));
+                            let mut open_follow = None;
+                            let mut clear_follow = None;
+                            let mut edit_follow = None;
+                            for contact in &self.follow_ups {
+                                ui.horizontal_wrapped(|ui| {
+                                    crate::brand::badge(ui, &contact.follow_up, Tone::Pending);
+                                    ui.strong(&contact.name);
+                                    if !contact.phone.is_empty() {
+                                        ui.weak(&contact.phone);
+                                    }
+                                    if ui.button(t("Fiche", "Card")).clicked() {
+                                        open_follow = Some(contact.name.clone());
+                                    }
+                                    if ui.button(t("Modifier", "Edit")).clicked() {
+                                        edit_follow = Some(contact.clone());
+                                    }
+                                    if ui.button(t("Relancé", "Done")).clicked() {
+                                        clear_follow = Some(contact.clone());
+                                    }
+                                });
+                            }
+                            if let Some(name) = open_follow {
+                                match self.store.client_history(&name) {
+                                    Ok(history) => self.client_detail = Some((name, history)),
+                                    Err(error) => self.error = Some(error.to_string()),
+                                }
+                            }
+                            if let Some(contact) = edit_follow {
+                                self.contact_tags_text = contact.tags.join(", ");
+                                self.new_contact = Some(contact);
+                            }
+                            if let Some(mut contact) = clear_follow {
+                                contact.follow_up.clear();
+                                match self.store.save_contact(&contact) {
+                                    Ok(()) => {
+                                        if let Some(open) = &mut self.new_contact
+                                            && open.id == contact.id
+                                        {
+                                            open.follow_up.clear();
+                                        }
+                                        self.notice = Some(t("Relance retirée.", "Follow-up cleared.").into());
+                                        self.refresh();
+                                    }
+                                    Err(error) => self.error = Some(error.to_string()),
+                                }
+                            }
+                        });
+                        ui.add_space(8.0);
+                    }
                     ui.add(
                         crate::brand::field(&mut self.contact_query).hint_text(t(
-                            "Rechercher un client ou une société",
-                            "Search clients or companies",
+                            "Rechercher un client, téléphone, note ou étiquette",
+                            "Search clients, phone, notes or tags",
                         )),
                     );
                     let mut open_review = None;
@@ -744,6 +826,21 @@ impl eframe::App for Drafts {
                                     close_client = ui.button(t("Fermer", "Close")).clicked();
                                 });
                             });
+                            if !history.summaries.is_empty() {
+                                ui.horizontal_wrapped(|ui| {
+                                    for summary in &history.summaries {
+                                        ui.label(format!(
+                                            "{} · {}: {} · {}: {}",
+                                            summary.currency,
+                                            t("CA HT", "Net revenue"),
+                                            crate::brand::money(&summary.revenue, &summary.currency, fr),
+                                            t("Reste à payer", "Outstanding"),
+                                            crate::brand::money(&summary.outstanding, &summary.currency, fr),
+                                        ));
+                                    }
+                                });
+                                ui.add_space(4.0);
+                            }
                             egui::ScrollArea::vertical()
                                 .id_salt("client_history")
                                 .max_height((ui.available_height() * 0.4).max(80.0))
@@ -795,9 +892,18 @@ impl eframe::App for Drafts {
                             let mut delete_contact = None;
                             let mut open_client = None;
                             for contact in &self.contacts {
-                                if ![&contact.name, &contact.email, &contact.address]
-                                    .iter()
-                                    .any(|field| field.to_lowercase().contains(&query))
+                                let tag_blob = contact.tags.join(" ");
+                                let address_line = contact.address.replace('\n', ", ");
+                                if ![
+                                    contact.name.as_str(),
+                                    contact.email.as_str(),
+                                    contact.address.as_str(),
+                                    contact.phone.as_str(),
+                                    contact.notes.as_str(),
+                                    tag_blob.as_str(),
+                                ]
+                                .iter()
+                                .any(|field| field.to_lowercase().contains(&query))
                                 {
                                     continue;
                                 }
@@ -809,10 +915,31 @@ impl eframe::App for Drafts {
                                                 if ui.add(egui::Label::new(egui::RichText::new(&contact.name).strong()).sense(egui::Sense::click())).on_hover_text(t("Voir l’historique", "View history")).clicked() {
                                                     open_client = Some(contact.name.clone());
                                                 }
-                                                for field in [&contact.email, &contact.address.replace('\n', ", "), &contact.registration] {
+                                                for field in [
+                                                    contact.email.as_str(),
+                                                    contact.phone.as_str(),
+                                                    address_line.as_str(),
+                                                    contact.registration.as_str(),
+                                                ] {
                                                     if !field.is_empty() {
                                                         ui.weak(field);
                                                     }
+                                                }
+                                                if !contact.follow_up.is_empty() {
+                                                    ui.horizontal_wrapped(|ui| {
+                                                        ui.weak(t("Relance", "Follow-up"));
+                                                        crate::brand::badge(ui, &contact.follow_up, Tone::Pending);
+                                                    });
+                                                }
+                                                if !contact.tags.is_empty() {
+                                                    ui.horizontal_wrapped(|ui| {
+                                                        for tag in &contact.tags {
+                                                            crate::brand::badge(ui, tag, Tone::Draft);
+                                                        }
+                                                    });
+                                                }
+                                                if !contact.notes.is_empty() {
+                                                    ui.weak(&contact.notes);
                                                 }
                                             });
                                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -846,6 +973,7 @@ impl eframe::App for Drafts {
                                 ui.weak(t("Aucun contact trouvé.", "No contacts found."));
                             }
                             if let Some(contact) = edit_contact {
+                                self.contact_tags_text = contact.tags.join(", ");
                                 self.new_contact = Some(contact);
                             }
                             if let Some(name) = open_client {
@@ -1126,6 +1254,7 @@ impl eframe::App for Drafts {
                                             address: self.quote.recipient_address.clone(),
                                             country: self.quote.recipient_country.clone(),
                                             registration: self.quote.recipient_registration.clone(),
+                                            ..Default::default()
                                         };
                                         match self.store.save_contact(&contact) {
                                             Ok(()) => {

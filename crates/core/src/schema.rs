@@ -5,7 +5,7 @@ use rusqlite::Connection;
 type Migration = fn(&Connection) -> Result<()>;
 
 /// Append only. Entry `n` upgrades a database from `user_version` n to n + 1.
-const MIGRATIONS: &[Migration] = &[v1];
+const MIGRATIONS: &[Migration] = &[v1, v2];
 
 /// Highest schema version this build understands.
 pub const VERSION: i64 = MIGRATIONS.len() as i64;
@@ -86,6 +86,15 @@ fn v1(db: &Connection) -> Result<()> {
     add_column(db, "billing", "closed_date", "TEXT")?;
     add_column(db, "contacts", "country", "TEXT NOT NULL DEFAULT ''")?;
     add_column(db, "contacts", "registration", "TEXT NOT NULL DEFAULT ''")?;
+    Ok(())
+}
+
+/// CRM fields on the local address book: phone, private notes, tags, follow-up date.
+fn v2(db: &Connection) -> Result<()> {
+    add_column(db, "contacts", "phone", "TEXT NOT NULL DEFAULT ''")?;
+    add_column(db, "contacts", "notes", "TEXT NOT NULL DEFAULT ''")?;
+    add_column(db, "contacts", "tags", "TEXT NOT NULL DEFAULT ''")?;
+    add_column(db, "contacts", "follow_up", "TEXT NOT NULL DEFAULT ''")?;
     Ok(())
 }
 
